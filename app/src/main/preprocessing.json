@@ -1,0 +1,13 @@
+{
+  "landmarks": "MediaPipe Hands, 21 points, one hand",
+  "raw_units": "x*image_width, y*image_height, z*image_width (use the same image you run MediaPipe on)",
+  "steps": [
+    "subtract wrist (landmark 0) from all points",
+    "divide by ||landmark9 - wrist|| (palm size), +1e-6",
+    "no rotation normalization (orientation preserved)",
+    "flatten to 63 values"
+  ],
+  "feature_order": "x0,y0,z0,x1,y1,z1,...,x20,y20,z20",
+  "left_right": "model trained with mirrored (x * -1) augmentation; no mirroring at inference",
+  "recommended_confidence_threshold": 0.8
+}
