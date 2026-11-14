@@ -297,6 +297,21 @@ class RealNearbyTransferManager(
                         totalBytes = totalBytes,
                         items = items
                     )
+                    if (activeReceiveSession != null || _incomingTransferOffer.value != null) {
+                        Log.w(TAG, "Ignoring/rejecting duplicate TRANSFER_OFFER $transferId while another receive is active")
+                        try {
+                            sendControlJson(
+                                endpointId,
+                                JSONObject().apply {
+                                    put("type", "TRANSFER_REJECT")
+                                    put("transferId", transferId)
+                                    put("reason", "Receiver busy with another transfer")
+                                }
+                            )
+                        } catch (_: Exception) {
+                        }
+                        return
+                    }
                     pendingOfferReceived = offer
                     _incomingTransferOffer.value = offer
                     _statusMessage.value = "Incoming transfer request from $senderName"
@@ -312,13 +327,14 @@ class RealNearbyTransferManager(
 
                 "TRANSFER_REJECT" -> {
                     val transferId = json.getString("transferId")
+                    val rejectReason = json.optString("reason", "Declined by receiver")
                     val sendSess = pendingSendSession ?: return
                     if (sendSess.transferId == transferId) {
                         sendSess.isCancelledOrFailed = true
                         val cancelled = _activeTransfer.value?.copy(
                             status = TransferStatus.CANCELLED,
-                            statusDetail = "${sendSess.targetDevice.name} declined the transfer.",
-                            errorMessage = "Declined by receiver"
+                            statusDetail = "${sendSess.targetDevice.name}: $rejectReason",
+                            errorMessage = rejectReason
                         ) ?: ActiveTransfer(
                             id = transferId,
                             senderName = sendSess.senderName,
@@ -327,11 +343,11 @@ class RealNearbyTransferManager(
                             totalBytes = sendSess.totalBytes,
                             status = TransferStatus.CANCELLED,
                             direction = TransferDirection.SEND,
-                            errorMessage = "Declined by receiver",
-                            statusDetail = "${sendSess.targetDevice.name} declined the transfer."
+                            errorMessage = rejectReason,
+                            statusDetail = "${sendSess.targetDevice.name}: $rejectReason"
                         )
                         _activeTransfer.value = cancelled
-                        _statusMessage.value = "Transfer declined by ${sendSess.targetDevice.name}"
+                        _statusMessage.value = "Transfer declined by ${sendSess.targetDevice.name}: $rejectReason"
                         pendingSendSession = null
                         sendSess.onComplete(cancelled)
                         onTransferFinishedListener?.invoke(cancelled)
@@ -487,7 +503,15 @@ class RealNearbyTransferManager(
         myDeviceName: String,
         onComplete: (ActiveTransfer) -> Unit
     ) {
-        if (items.isEmpty()) return
+        if (items.isEmpty()) {
+            _statusMessage.value = "No content staged to transfer."
+            return
+        }
+
+        if (pendingSendSession != null) {
+            _statusMessage.value = "Duplicate transfer request blocked: transfer already active."
+            return
+        }
 
         lastTargetDevice = targetDevice
         lastTransferItems = items
@@ -502,7 +526,7 @@ class RealNearbyTransferManager(
                 totalBytes = items.sumOf { it.sizeBytes },
                 status = TransferStatus.FAILED,
                 direction = TransferDirection.SEND,
-                errorMessage = "Not connected to ${targetDevice.name}. Please accept the pairing code first.",
+                errorMessage = "Receiver '${targetDevice.name}' unavailable or not connected. Complete Nearby pairing first.",
                 statusDetail = "No active Nearby connection to ${targetDevice.name}"
             )
             _activeTransfer.value = failed
@@ -836,6 +860,39 @@ class RealNearbyTransferManager(
 
         _incomingTransferOffer.value = null
         pendingOfferReceived = null
+
+        val availableBytes = context.filesDir.usableSpace
+        if (offer.totalBytes > 0L && availableBytes < offer.totalBytes + 512L * 1024L) {
+            val storageMsg = "Insufficient storage space on receiver (need ${offer.totalBytes} bytes)"
+            _statusMessage.value = storageMsg
+            val failed = ActiveTransfer(
+                id = offer.transferId,
+                senderName = offer.senderName,
+                receiverName = currentDeviceName,
+                items = offer.items.map {
+                    ContentItem(name = it.name, mimeType = it.mimeType, sizeBytes = it.sizeBytes, type = it.contentType)
+                },
+                totalBytes = offer.totalBytes,
+                status = TransferStatus.FAILED,
+                direction = TransferDirection.RECEIVE,
+                errorMessage = storageMsg,
+                statusDetail = storageMsg
+            )
+            _activeTransfer.value = failed
+            onTransferFinishedListener?.invoke(failed)
+            try {
+                sendControlJson(
+                    offer.endpointId,
+                    JSONObject().apply {
+                        put("type", "TRANSFER_REJECT")
+                        put("transferId", transferId)
+                        put("reason", storageMsg)
+                    }
+                )
+            } catch (_: Exception) {
+            }
+            return
+        }
 
         val metadataMap = offer.items.associateBy { it.itemIndex }
         val session = ReceiveSession(
@@ -1321,10 +1378,17 @@ class RealNearbyTransferManager(
                 )
             } catch (_: Exception) {
             }
+            sendSess.items.forEach { item ->
+                item.cachedFilePath?.let { path ->
+                    if (path.contains("${File.separator}outgoing${File.separator}")) {
+                        runCatching { File(path).delete() }
+                    }
+                }
+            }
             val cancelled = _activeTransfer.value?.copy(
                 status = TransferStatus.CANCELLED,
                 statusDetail = "Transfer cancelled by user",
-                errorMessage = "Cancelled by sender"
+                errorMessage = "Cancelled by user"
             )
             if (cancelled != null) {
                 _activeTransfer.value = cancelled
@@ -1413,10 +1477,22 @@ class RealNearbyTransferManager(
                 _statusMessage.value = "Connected to $endpointName. Ready for real file transfers."
                 updateDeviceConnectionState(endpointId, DeviceConnectionState.CONNECTED, endpointName)
             } else {
-                Log.w(TAG, "Connection rejected or failed: ${resolution.status.statusMessage ?: resolution.status.statusCode}")
+                val friendlyReason = when (resolution.status.statusCode) {
+                    ConnectionsStatusCodes.STATUS_CONNECTION_REJECTED ->
+                        "Connection rejected by $endpointName."
+                    ConnectionsStatusCodes.STATUS_ENDPOINT_IO_ERROR ->
+                        "Bluetooth/Wi-Fi I/O error connecting to $endpointName. Move phones closer and retry."
+                    ConnectionsStatusCodes.STATUS_BLUETOOTH_ERROR ->
+                        "Bluetooth radio error. Ensure Bluetooth is turned on."
+                    ConnectionsStatusCodes.STATUS_ENDPOINT_UNKNOWN ->
+                        "Receiver unavailable or out of range. Refresh discovery and retry."
+                    else ->
+                        "Connection failed (${resolution.status.statusMessage ?: resolution.status.statusCode})."
+                }
+                Log.w(TAG, "Connection rejected or failed: $friendlyReason")
                 _connectedDevice.value = null
                 _pendingSession.value = session?.copy(status = SessionStatus.FAILED)
-                _statusMessage.value = "Connection failed (${resolution.status.statusCode})"
+                _statusMessage.value = friendlyReason
                 updateDeviceConnectionState(endpointId, DeviceConnectionState.FAILED, endpointName)
             }
         }

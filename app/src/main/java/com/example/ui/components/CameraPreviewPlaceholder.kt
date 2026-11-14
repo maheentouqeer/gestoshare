@@ -260,22 +260,28 @@ fun CameraPreviewPlaceholder(
             drawLine(strokeColor, Offset(w - inset, h - inset), Offset(w - inset - cornerLength, h - inset), strokeWidth)
             drawLine(strokeColor, Offset(w - inset, h - inset), Offset(w - inset, h - inset - cornerLength), strokeWidth)
 
-            // Draw real 21-landmark skeleton when MediaPipe detects a hand
+            // Draw real 21-landmark skeleton when MediaPipe detects a hand.
+            // MediaPipe runs on upright unmirrored frames (per preprocessing.json), so when using
+            // the front selfie PreviewView (which mirrors visually) we mirror only the Canvas X display.
             val points = handTrackingState.landmarks
+            val mirrorOverlayX = handTrackingState.isFrontCamera
             if (points.size >= 21) {
                 for ((startIdx, endIdx) in MediaPipeHandTracker.HAND_CONNECTIONS) {
                     val a = points[startIdx]
                     val b = points[endIdx]
+                    val ax = if (mirrorOverlayX) 1f - a.x else a.x
+                    val bx = if (mirrorOverlayX) 1f - b.x else b.x
                     drawLine(
                         color = ElectricViolet.copy(alpha = 0.9f),
-                        start = Offset(a.x * w, a.y * h),
-                        end = Offset(b.x * w, b.y * h),
+                        start = Offset(ax * w, a.y * h),
+                        end = Offset(bx * w, b.y * h),
                         strokeWidth = 3.dp.toPx(),
                         cap = StrokeCap.Round
                     )
                 }
                 points.forEachIndexed { idx, lm ->
-                    val center = Offset(lm.x * w, lm.y * h)
+                    val drawX = if (mirrorOverlayX) 1f - lm.x else lm.x
+                    val center = Offset(drawX * w, lm.y * h)
                     val isTip = idx == 4 || idx == 8 || idx == 12 || idx == 16 || idx == 20
                     val isWrist = idx == 0
                     drawCircle(
@@ -301,6 +307,7 @@ fun CameraPreviewPlaceholder(
                     fillColor = Color(0xCC090E1B),
                     borderAccent = when {
                         handTrackingState.status == HandTrackerStatus.CAMERA_ERROR -> RoseError
+                        handTrackingState.status == HandTrackerStatus.MODEL_MISSING -> Color(0xFFF59E0B)
                         handTrackingState.isHandDetected -> EmeraldSuccess
                         else -> NeonCyan.copy(alpha = 0.4f)
                     }
@@ -328,7 +335,7 @@ fun CameraPreviewPlaceholder(
                     "ASSET MISSING (${handTrackingState.fps} FPS)"
                 handTrackingState.status == HandTrackerStatus.CAMERA_ERROR -> "CAMERA ERROR"
                 handTrackingState.isHandDetected ->
-                    "${handTrackingState.handedness.uppercase()} HAND · ${handTrackingState.fps} FPS · ${handTrackingState.inferenceTimeMs}ms"
+                    "${handTrackingState.handedness.uppercase()} · ${handTrackingState.fps} FPS · MP ${handTrackingState.inferenceTimeMs}ms"
                 else -> "SCANNING HAND · ${handTrackingState.fps} FPS"
             }
             Text(
@@ -336,11 +343,15 @@ fun CameraPreviewPlaceholder(
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
-                color = if (isHandDetected) EmeraldSuccess else TextPrimary
+                color = when {
+                    handTrackingState.status == HandTrackerStatus.MODEL_MISSING -> Color(0xFFF59E0B)
+                    isHandDetected -> EmeraldSuccess
+                    else -> TextPrimary
+                }
             )
         }
 
-        // Bottom Frosted Gesture HUD
+        // Bottom Frosted Gesture HUD (ONNX Prediction + Confidence + Latency)
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -348,8 +359,12 @@ fun CameraPreviewPlaceholder(
                 .padding(12.dp)
                 .glassSurface(
                     cornerRadius = 16.dp,
-                    fillColor = GlassFillElevated.copy(alpha = 0.85f),
-                    borderAccent = NeonCyan.copy(alpha = 0.35f)
+                    fillColor = GlassFillElevated.copy(alpha = 0.88f),
+                    borderAccent = when {
+                        currentGesture.isAccepted -> EmeraldSuccess.copy(alpha = 0.65f)
+                        currentGesture.isHandDetected -> Color(0xFFF59E0B).copy(alpha = 0.5f)
+                        else -> NeonCyan.copy(alpha = 0.35f)
+                    }
                 )
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -365,14 +380,28 @@ fun CameraPreviewPlaceholder(
                     fontSize = 26.sp
                 )
                 Column {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = if (currentGesture.isHandDetected) {
+                                "${currentGesture.predictedClass.uppercase()} · ${currentGesture.gesture.actionName}"
+                            } else {
+                                currentGesture.gesture.actionName
+                            },
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (currentGesture.isAccepted) EmeraldSuccess else NeonCyan
+                        )
+                    }
                     Text(
-                        text = currentGesture.gesture.actionName,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = NeonCyan
-                    )
-                    Text(
-                        text = currentGesture.gesture.description,
+                        text = when {
+                            currentGesture.errorMessage != null -> currentGesture.errorMessage
+                            currentGesture.isAccepted -> "Accepted (idx=${currentGesture.predictedClassIndex}) · ONNX ${currentGesture.inferenceLatencyUs}µs"
+                            currentGesture.isHandDetected -> "Filtered -> OTHER / uncertain (${currentGesture.inferenceLatencyUs}µs)"
+                            else -> currentGesture.gesture.description
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         fontSize = 11.sp,
                         color = TextSecondary,
@@ -383,17 +412,26 @@ fun CameraPreviewPlaceholder(
 
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = if (handTrackingState.normalizedFeatureVector != null) "[1,63]" else "Confidence",
+                    text = when {
+                        currentGesture.isAccepted -> "ACCEPTED"
+                        currentGesture.isHandDetected -> "UNCERTAIN"
+                        else -> "NO HAND"
+                    },
                     fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
-                    color = TextSecondary
+                    fontWeight = FontWeight.Bold,
+                    color = when {
+                        currentGesture.isAccepted -> EmeraldSuccess
+                        currentGesture.isHandDetected -> Color(0xFFF59E0B)
+                        else -> TextSecondary
+                    }
                 )
                 Text(
                     text = "${(currentGesture.confidence * 100).toInt()}%",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
-                    color = if (currentGesture.confidence > 0.7f) NeonCyan else TextSecondary
+                    color = if (currentGesture.isAccepted) EmeraldSuccess else TextSecondary
                 )
             }
         }

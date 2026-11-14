@@ -167,7 +167,16 @@ fun AirShareApp(viewModel: AirShareViewModel) {
     val sessionState by viewModel.gestureManager.sessionState.collectAsStateWithLifecycle()
     val isTrackingHand by viewModel.gestureManager.isTrackingHand.collectAsStateWithLifecycle()
     val handTrackingState by viewModel.handTrackingState.collectAsStateWithLifecycle()
-    val testWithoutTransfer by viewModel.testWithoutTransfer.collectAsStateWithLifecycle()
+    val liveOnnxPrediction by viewModel.liveOnnxPrediction.collectAsStateWithLifecycle()
+    val onnxConfidenceThreshold by viewModel.onnxConfidenceThreshold.collectAsStateWithLifecycle()
+    val onnxLatencyStats by viewModel.onnxLatencyStats.collectAsStateWithLifecycle()
+    val predictionHistory by viewModel.predictionHistory.collectAsStateWithLifecycle()
+    val stabilizerDecision by viewModel.stabilizerDecision.collectAsStateWithLifecycle()
+    val stabilizerConfig by viewModel.stabilizerConfig.collectAsStateWithLifecycle()
+    val operationMode by viewModel.operationMode.collectAsStateWithLifecycle()
+    val sessionFeedback by viewModel.sessionFeedback.collectAsStateWithLifecycle()
+    val commandLogs by viewModel.commandLogs.collectAsStateWithLifecycle()
+    val isContentGrabbed by viewModel.isContentGrabbed.collectAsStateWithLifecycle()
 
     val pendingSession by viewModel.pendingSession.collectAsStateWithLifecycle()
     val connectedDevice by viewModel.connectedDevice.collectAsStateWithLifecycle()
@@ -333,15 +342,50 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                     ScreenRoute.GESTURE_CONTROL -> {
                         GestureControlScreen(
                             currentGesture = currentGesture,
+                            liveOnnxPrediction = liveOnnxPrediction,
+                            onnxDiagnostics = viewModel.onnxDiagnostics,
+                            confidenceThreshold = onnxConfidenceThreshold,
+                            latencyStats = onnxLatencyStats,
+                            predictionHistory = predictionHistory,
+                            stabilizerDecision = stabilizerDecision,
+                            stabilizerConfig = stabilizerConfig,
+                            operationMode = operationMode,
                             sessionState = sessionState,
+                            sessionFeedback = sessionFeedback,
+                            commandLogs = commandLogs,
+                            isContentGrabbed = isContentGrabbed,
+                            stagedItems = stagedItems,
+                            discoveredDevices = discoveredDevices,
+                            selectedDevice = targetDevice,
+                            connectedDevice = connectedDevice,
+                            pendingSession = pendingSession,
                             isTrackingHand = isTrackingHand,
                             handTrackingState = handTrackingState,
                             handTracker = viewModel.handTracker,
-                            testWithoutTransfer = testWithoutTransfer,
-                            onToggleTestWithoutTransfer = { viewModel.setTestWithoutTransfer(it) },
                             classifierInfo = viewModel.gestureManager.classifierInfo,
+                            onSelectOperationMode = { viewModel.setGestureOperationMode(it) },
+                            onUpdateConfidenceThreshold = { viewModel.updateConfidenceThreshold(it) },
+                            onUpdateConsecutiveFrames = { viewModel.updateStabilizerConsecutiveFrames(it) },
+                            onClearPredictionHistory = { viewModel.clearPredictionHistory() },
+                            onDismissFeedback = { viewModel.clearSessionFeedback() },
+                            onStartDiscovery = {
+                                checkAndExecuteWithNearbyPermissions {
+                                    viewModel.startNearbyDiscovery()
+                                }
+                            },
+                            onSelectDevice = { dev -> viewModel.selectTargetDevice(dev) },
+                            onRequestConnection = { dev ->
+                                checkAndExecuteWithNearbyPermissions {
+                                    viewModel.requestNearbyConnection(dev)
+                                }
+                            },
+                            onAcceptConnection = { endpointId -> viewModel.acceptNearbyConnection(endpointId) },
+                            onRejectConnection = { endpointId -> viewModel.rejectNearbyConnection(endpointId) },
+                            onExecuteManualTransfer = { dev -> viewModel.executeTransfer(dev) },
+                            onManualCancel = { viewModel.cancelGestureWorkflowManually() },
                             onSimulateGesture = { gesture -> viewModel.simulateGesture(gesture) },
-                            onResetSession = { viewModel.gestureManager.resetSession() }
+                            onResetSession = { viewModel.resetGestureSession() },
+                            onNavigate = { route -> viewModel.navigateTo(route) }
                         )
                     }
 
