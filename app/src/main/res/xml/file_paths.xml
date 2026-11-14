@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="gestoshare_cache" path="." />
+    <files-path name="gestoshare_files" path="." />
+    <external-files-path name="gestoshare_ext_files" path="." />
+    <external-path name="gestoshare_download" path="Download" />
+</paths>
