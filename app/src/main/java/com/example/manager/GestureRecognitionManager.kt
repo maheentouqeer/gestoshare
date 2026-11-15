@@ -339,6 +339,15 @@ class DefaultGestureRecognitionManager(
                         emptyList()
                     }
 
+                    if (context.isMultiSelectMode) {
+                        if (groupTargets.isEmpty()) {
+                            val msg = "No connected group recipients selected. Verify peer connections first."
+                            _sessionFeedback.value = msg
+                            appendLog("THREE_GUN blocked: 0 connected group recipients")
+                            return GestureActionEffect.None(msg, isError = true)
+                        }
+                    }
+
                     val singleTarget = context.selectedDevice?.let { sel ->
                         allConnected.find { it.endpointId == sel.endpointId } ?: sel
                     } ?: allConnected.firstOrNull()
@@ -374,7 +383,7 @@ class DefaultGestureRecognitionManager(
                         return GestureActionEffect.None(msg, isError = true)
                     }
 
-                    val effectiveTargets = if (groupTargets.isNotEmpty()) groupTargets else {
+                    val effectiveTargets = if (context.isMultiSelectMode) groupTargets else {
                         val t = singleTarget!!
                         val isConnectedToTarget = allConnected.any { it.endpointId == t.endpointId }
                         if (!isConnectedToTarget || current != GestureSessionState.CONNECTED) {

@@ -1,8 +1,10 @@
 package com.example.manager
 
+import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import androidx.core.content.FileProvider
 import com.example.data.DiagnosticsRepository
 import com.example.model.ActiveTransfer
@@ -15,6 +17,7 @@ import com.example.model.DeviceType
 import com.example.model.DiagnosticCategory
 import com.example.model.DiagnosticClassifier
 import com.example.model.DiagnosticCodes
+import com.example.model.ErrorSeverity
 import com.example.model.IncomingTransferOffer
 import com.example.model.NearbyMessage
 import com.example.model.SessionStatus
@@ -43,7 +46,6 @@ import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import com.google.android.gms.nearby.connection.Strategy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -164,6 +166,8 @@ class RealNearbyTransferManager(
         val payloadMetaByPayloadId: ConcurrentHashMap<Long, TransferItemMetadata> = ConcurrentHashMap(),
         val receivedFilePayloads: ConcurrentHashMap<Long, Payload> = ConcurrentHashMap(),
         val payloadBytesProgress: ConcurrentHashMap<Long, Long> = ConcurrentHashMap(),
+        val completedTotalBytesByPayloadId: ConcurrentHashMap<Long, Long> = ConcurrentHashMap(),
+        val ignoredBytesPayloadIds: MutableSet<Long> = ConcurrentHashMap.newKeySet(),
         val verifiedItems: ConcurrentHashMap<Int, ContentItem> = ConcurrentHashMap(),
         val verifiedHashes: ConcurrentHashMap<Int, String> = ConcurrentHashMap(),
         var latestSavedUri: Uri? = null,
@@ -177,6 +181,9 @@ class RealNearbyTransferManager(
     private val sendSessionsByPayloadId = ConcurrentHashMap<Long, SendSession>()
     private var pendingOfferReceived: IncomingTransferOffer? = null
     private var activeReceiveSession: ReceiveSession? = null
+
+    @VisibleForTesting
+    internal var controlPacketHookForTesting: ((String, JSONObject) -> Unit)? = null
 
     init {
         checkGooglePlayServices()
@@ -231,6 +238,10 @@ class RealNearbyTransferManager(
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             when (payload.type) {
                 Payload.Type.BYTES -> {
+                    activeReceiveSession
+                        ?.takeIf { it.endpointId == endpointId }
+                        ?.ignoredBytesPayloadIds
+                        ?.add(payload.id)
                     val rawBytes = payload.asBytes() ?: return
                     val text = String(rawBytes, StandardCharsets.UTF_8)
                     if (text.startsWith(CTRL_PREFIX)) {
@@ -247,12 +258,27 @@ class RealNearbyTransferManager(
                         IncomingPayloadStorage.safeDeletePayload(context, payload)
                         return
                     }
+                    val newlyRegistered = session.manifestTracker.onFilePayloadReceived(payload.id, payload)
+                    if (!newlyRegistered) {
+                        diagnostics?.recordLog(
+                            category = DiagnosticCategory.TRANSFER,
+                            tag = TAG,
+                            level = "WARN",
+                            message = "Ignored duplicate FILE payload callback (id=${payload.id}) from $endpointId"
+                        )
+                        return
+                    }
                     session.receivedFilePayloads[payload.id] = payload
+                    session.completedTotalBytesByPayloadId[payload.id]?.let { bytes ->
+                        session.payloadBytesProgress[payload.id] = bytes
+                        updateReceiverProgress(session)
+                    }
                     diagnostics?.recordLog(
                         category = DiagnosticCategory.TRANSFER,
                         tag = TAG,
                         message = "Incoming FILE payload registered (id=${payload.id}) from $endpointId"
                     )
+                    tryStartIncomingPayloadProcessing(session, payload.id)
                 }
             }
         }
@@ -267,10 +293,12 @@ class RealNearbyTransferManager(
                 return
             }
 
+            // Do not drop early updates before FILE or TRANSFER_FILE_MAP arrive!
             val recvSess = activeReceiveSession
-            if (recvSess != null && recvSess.endpointId == endpointId &&
-                (recvSess.receivedFilePayloads.containsKey(update.payloadId) ||
-                    recvSess.manifestTracker.hasMetadata(update.payloadId))
+            if (recvSess != null &&
+                !recvSess.isFinishedOrCancelled &&
+                recvSess.endpointId == endpointId &&
+                !recvSess.ignoredBytesPayloadIds.contains(update.payloadId)
             ) {
                 handleReceiverPayloadUpdate(recvSess, update)
             }
@@ -351,14 +379,24 @@ class RealNearbyTransferManager(
                         items = items
                     )
                     if (activeReceiveSession != null || _incomingTransferOffer.value != null) {
-                        Log.w(TAG, "Receiver busy; rejecting $transferId from $endpointId")
+                        val busyReason = "Receiver busy with another incoming transfer"
+                        val currentReceiveId = activeReceiveSession?.transferId ?: _incomingTransferOffer.value?.transferId
+                        Log.w(TAG, "Receiver busy (active=$currentReceiveId); rejecting $transferId from $endpointId")
+                        diagnostics?.recordLog(
+                            category = DiagnosticCategory.TRANSFER,
+                            tag = TAG,
+                            level = "WARN",
+                            message = "Rejected concurrent TRANSFER_OFFER $transferId from $senderName [$endpointId]: $busyReason",
+                            metadata = "activeReceiveTransferId=${currentReceiveId ?: "none"}"
+                        )
                         try {
                             sendControlJson(
                                 endpointId,
                                 JSONObject().apply {
                                     put("type", "TRANSFER_REJECT")
                                     put("transferId", transferId)
-                                    put("reason", "Receiver busy with another incoming transfer")
+                                    put("reason", busyReason)
+                                    put("busy", true)
                                 }
                             )
                         } catch (_: Exception) {
@@ -391,10 +429,17 @@ class RealNearbyTransferManager(
                 "TRANSFER_REJECT" -> {
                     val transferId = json.getString("transferId")
                     val rejectReason = json.optString("reason", "Declined by receiver")
+                    val isBusyRejection = json.optBoolean("busy", false) ||
+                        rejectReason.contains("busy", ignoreCase = true)
                     val sendSess = sendSessionsByTransferId[transferId] ?: return
                     if (sendSess.endpointId == endpointId) {
                         sendSess.isCancelledOrFailed = true
                         val existing = _endpointTransfers.value[endpointId]
+                        val detailMsg = if (isBusyRejection) {
+                            "${sendSess.targetDevice.name} busy: $rejectReason"
+                        } else {
+                            "${sendSess.targetDevice.name}: $rejectReason"
+                        }
                         val cancelled = (existing ?: ActiveTransfer(
                             id = transferId,
                             senderName = sendSess.senderName,
@@ -406,18 +451,23 @@ class RealNearbyTransferManager(
                         )).copy(
                             status = TransferStatus.CANCELLED,
                             pipelineStage = TransferPipelineStage.FAILED,
-                            statusDetail = "${sendSess.targetDevice.name}: $rejectReason",
+                            statusDetail = detailMsg,
                             errorMessage = rejectReason,
                             lastErrorCode = DiagnosticCodes.GS_NET_004
                         )
                         updateTransferState(endpointId, cancelled)
-                        _statusMessage.value = "Declined by ${sendSess.targetDevice.name}: $rejectReason"
+                        _statusMessage.value = detailMsg
                         diagnostics?.recordError(
                             code = DiagnosticCodes.GS_NET_004,
-                            category = DiagnosticCategory.NEARBY,
+                            category = DiagnosticCategory.TRANSFER,
                             sourceComponent = TAG,
                             operation = "TRANSFER_REJECT",
-                            summary = "${sendSess.targetDevice.name} declined transfer: $rejectReason",
+                            summary = if (isBusyRejection) {
+                                "${sendSess.targetDevice.name} is busy with another incoming transfer ($rejectReason)"
+                            } else {
+                                "${sendSess.targetDevice.name} declined transfer: $rejectReason"
+                            },
+                            severity = ErrorSeverity.WARNING,
                             relatedTransferId = transferId,
                             relatedEndpointId = endpointId
                         )
@@ -464,6 +514,11 @@ class RealNearbyTransferManager(
                         )
                         recvSess.payloadMetaByPayloadId[payloadId] = meta
                         recvSess.manifestTracker.registerManifest(transferId, payloadId, meta)
+                        recvSess.completedTotalBytesByPayloadId[payloadId]?.let { bytes ->
+                            recvSess.payloadBytesProgress[payloadId] = bytes
+                            updateReceiverProgress(recvSess)
+                        }
+                        tryStartIncomingPayloadProcessing(recvSess, payloadId)
                     }
                 }
 
@@ -588,8 +643,20 @@ class RealNearbyTransferManager(
     }
 
     private fun sendControlJson(endpointId: String, json: JSONObject) {
+        controlPacketHookForTesting?.invoke(endpointId, json)
         val raw = (CTRL_PREFIX + json.toString()).toByteArray(StandardCharsets.UTF_8)
         connectionsClient.sendPayload(endpointId, Payload.fromBytes(raw))
+    }
+
+    @VisibleForTesting
+    internal fun processControlMessageForTesting(endpointId: String, jsonStr: String) {
+        handleControlMessage(endpointId, jsonStr)
+    }
+
+    @VisibleForTesting
+    internal fun registerConnectedPeerForTesting(device: DeviceItem) {
+        connectedDeviceMap[device.endpointId] = device
+        syncPeerLists()
     }
 
     // =========================================================================
@@ -1238,14 +1305,17 @@ class RealNearbyTransferManager(
                 destFile.writeText(text, StandardCharsets.UTF_8)
 
                 val (msUri, msNote) = incomingStorage.exportToPublicDownloads(destFile, destFile.name, "text/plain")
-                val fileUri = FileProvider.getUriForFile(
-                    context,
-                    "${context.packageName}.fileprovider",
-                    destFile
-                )
-                recvSess.latestSavedUri = msUri ?: fileUri
+                val fileUri = runCatching {
+                    FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        destFile
+                    )
+                }.getOrNull()
+                val safeMsUri = msUri?.takeIf { it.scheme == ContentResolver.SCHEME_CONTENT }
+                recvSess.latestSavedUri = safeMsUri ?: fileUri
                 recvSess.latestSavedMime = if (meta.contentType == ContentType.URL) "text/uri-list" else "text/plain"
-                recvSess.allMediaStoreExported = recvSess.allMediaStoreExported && (msUri != null && msNote == null)
+                recvSess.allMediaStoreExported = recvSess.allMediaStoreExported && (msNote == null && msUri != null)
                 if (msNote != null) recvSess.latestMediaStoreNote = msNote
 
                 recvSess.verifiedHashes[meta.itemIndex] = actualHash
@@ -1284,64 +1354,81 @@ class RealNearbyTransferManager(
     }
 
     private fun handleReceiverPayloadUpdate(recvSess: ReceiveSession, update: PayloadTransferUpdate) {
-        if (recvSess.isFinishedOrCancelled) return
+        if (recvSess.isFinishedOrCancelled || !recvSess.manifestTracker.isSessionActive()) return
         when (update.status) {
             PayloadTransferUpdate.Status.IN_PROGRESS -> {
-                recvSess.payloadBytesProgress[update.payloadId] = update.bytesTransferred
-                updateReceiverProgress(recvSess)
+                if (recvSess.manifestTracker.isFileOrManifestKnown(update.payloadId)) {
+                    recvSess.payloadBytesProgress[update.payloadId] = update.bytesTransferred
+                    updateReceiverProgress(recvSess)
+                }
             }
 
             PayloadTransferUpdate.Status.SUCCESS -> {
-                recvSess.payloadBytesProgress[update.payloadId] = update.totalBytes.coerceAtLeast(update.bytesTransferred)
-                recvSess.manifestTracker.markPayloadCompleted(update.payloadId)
-                updateReceiverProgress(recvSess)
-                val payload = recvSess.receivedFilePayloads[update.payloadId] ?: return
-                verifyAndSaveIncomingFilePayload(recvSess, payload)
+                val completedBytes = update.totalBytes.coerceAtLeast(update.bytesTransferred)
+                recvSess.completedTotalBytesByPayloadId[update.payloadId] = completedBytes
+                val newlyMarked = recvSess.manifestTracker.onTransportSuccess(update.payloadId)
+                if (recvSess.manifestTracker.isFileOrManifestKnown(update.payloadId)) {
+                    recvSess.payloadBytesProgress[update.payloadId] = completedBytes
+                    updateReceiverProgress(recvSess)
+                }
+                if (newlyMarked) {
+                    diagnostics?.recordLog(
+                        category = DiagnosticCategory.TRANSFER,
+                        tag = TAG,
+                        message = "Transport SUCCESS received for payloadId=${update.payloadId} ($completedBytes B)"
+                    )
+                }
+                tryStartIncomingPayloadProcessing(recvSess, update.payloadId)
             }
 
             PayloadTransferUpdate.Status.FAILURE, PayloadTransferUpdate.Status.CANCELED -> {
+                val isKnown = recvSess.manifestTracker.isFileOrManifestKnown(update.payloadId)
                 val isCanceled = update.status == PayloadTransferUpdate.Status.CANCELED
-                val msg = if (isCanceled) "Incoming transfer cancelled" else "Incoming file stream interrupted"
-                failReceiveSession(
-                    recvSess,
-                    reason = msg,
-                    isCancelled = isCanceled,
-                    errorCode = if (isCanceled) null else DiagnosticCodes.GS_NET_003
-                )
+                if (isKnown || !isCanceled) {
+                    recvSess.manifestTracker.markFailed(
+                        update.payloadId,
+                        if (isCanceled) "Incoming transfer cancelled" else "Incoming file stream interrupted"
+                    )
+                    val msg = if (isCanceled) "Incoming transfer cancelled" else "Incoming file stream interrupted"
+                    failReceiveSession(
+                        recvSess,
+                        reason = msg,
+                        isCancelled = isCanceled,
+                        errorCode = if (isCanceled) null else DiagnosticCodes.GS_NET_003
+                    )
+                }
             }
         }
     }
 
-    private fun verifyAndSaveIncomingFilePayload(recvSess: ReceiveSession, payload: Payload) {
+    /**
+     * Single idempotent three-way coordinator trigger invoked whenever any of the three
+     * independent prerequisites changes:
+     * 1. `onPayloadReceived(FILE)`
+     * 2. `onPayloadTransferUpdate(SUCCESS)`
+     * 3. `TRANSFER_FILE_MAP` manifest arrival
+     *
+     * Atomically starts verification/storage at most once when all 3 are present and the
+     * receive session remains active.
+     */
+    private fun tryStartIncomingPayloadProcessing(recvSess: ReceiveSession, payloadId: Long) {
+        if (recvSess.isFinishedOrCancelled || !recvSess.manifestTracker.isSessionActive()) {
+            return
+        }
+        val claim = recvSess.manifestTracker.tryClaimForProcessing(payloadId, Payload::class.java)
+            ?: return
+        verifyAndSaveIncomingFilePayload(recvSess, claim.payload, claim.metadata)
+    }
+
+    private fun verifyAndSaveIncomingFilePayload(
+        recvSess: ReceiveSession,
+        payload: Payload,
+        meta: TransferItemMetadata
+    ) {
         scope.launch(Dispatchers.IO) {
             try {
-                // Wait briefly in case TRANSFER_FILE_MAP arrives slightly after FILE payload
-                var meta = recvSess.manifestTracker.claimForVerification(payload.id)
-                var waitAttempts = 0
-                while (meta == null && !recvSess.manifestTracker.isProcessed(payload.id) &&
-                    waitAttempts < 60 && !recvSess.isFinishedOrCancelled
-                ) {
-                    delay(50)
-                    meta = recvSess.manifestTracker.claimForVerification(payload.id)
-                    waitAttempts++
-                }
-
-                if (recvSess.isFinishedOrCancelled) {
+                if (recvSess.isFinishedOrCancelled || !recvSess.manifestTracker.isSessionActive()) {
                     IncomingPayloadStorage.safeDeletePayload(context, payload)
-                    return@launch
-                }
-
-                if (recvSess.manifestTracker.isProcessed(payload.id) && meta == null) {
-                    return@launch
-                }
-
-                if (meta == null) {
-                    IncomingPayloadStorage.safeDeletePayload(context, payload)
-                    failReceiveSession(
-                        recvSess,
-                        reason = "Missing metadata manifest for payload ${payload.id}",
-                        errorCode = DiagnosticCodes.GS_FILE_001
-                    )
                     return@launch
                 }
 
@@ -1361,19 +1448,22 @@ class RealNearbyTransferManager(
                     }
                 }
 
-                val payloadSource = IncomingPayloadStorage.resolvePayloadSource(payload)
-                    ?: throw TransferVerificationException(
-                        code = DiagnosticCodes.GS_FILE_001,
-                        category = DiagnosticCategory.FILE_IO,
-                        message = "Nearby payload ${payload.id} exposed no readable URI or PFD source.",
-                        suggestedAction = "Ensure payload uses ContentResolver URI stream and retry."
-                    )
+                val payloadSource = IncomingPayloadStorage.resolvePayloadSourceOrThrow(payload)
 
                 val saved = incomingStorage.copyVerifyAndSave(
                     transferId = recvSess.transferId,
                     meta = meta,
                     source = payloadSource,
                     onStageChange = { stage, detail ->
+                        when (stage) {
+                            TransferPipelineStage.VERIFYING_INTEGRITY -> {
+                                recvSess.manifestTracker.markFileCopyCompleted(payload.id)
+                            }
+                            TransferPipelineStage.EXPORTING_TO_DOWNLOADS -> {
+                                recvSess.manifestTracker.markIntegrityVerified(payload.id)
+                            }
+                            else -> Unit
+                        }
                         scope.launch(Dispatchers.Main) {
                             val cur = _endpointTransfers.value[recvSess.endpointId] ?: _activeTransfer.value
                             if (cur != null && cur.id == recvSess.transferId) {
@@ -1392,6 +1482,7 @@ class RealNearbyTransferManager(
                     }
                 )
 
+                recvSess.manifestTracker.markFinalStorageCompleted(payload.id)
                 recvSess.latestSavedUri = saved.shareableUri
                 recvSess.latestSavedMime = meta.mimeType
                 if (!saved.mediaStoreExported) {
@@ -1416,6 +1507,7 @@ class RealNearbyTransferManager(
                 checkReceiveSessionCompletion(recvSess)
             } catch (e: TransferVerificationException) {
                 Log.e(TAG, "Verification/Scoped Storage error [${e.code}]: ${e.message}", e)
+                recvSess.manifestTracker.markFailed(payload.id, e.message)
                 IncomingPayloadStorage.safeDeletePayload(context, payload)
                 failReceiveSession(
                     recvSess,
@@ -1425,6 +1517,7 @@ class RealNearbyTransferManager(
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Error verifying/saving incoming file", e)
+                recvSess.manifestTracker.markFailed(payload.id, e.message)
                 IncomingPayloadStorage.safeDeletePayload(context, payload)
                 val classified = DiagnosticClassifier.classifyThrowable(
                     throwable = e,
@@ -1446,10 +1539,12 @@ class RealNearbyTransferManager(
     }
 
     private suspend fun checkReceiveSessionCompletion(recvSess: ReceiveSession) {
-        if (recvSess.isFinishedOrCancelled) return
-        if (recvSess.verifiedItems.size < recvSess.expectedItems.size) return
-
-        recvSess.isFinishedOrCancelled = true
+        synchronized(recvSess) {
+            if (recvSess.isFinishedOrCancelled) return
+            if (recvSess.verifiedItems.size < recvSess.expectedItems.size) return
+            recvSess.isFinishedOrCancelled = true
+        }
+        recvSess.manifestTracker.markSessionCompleted()
         val elapsedSec = ((System.currentTimeMillis() - recvSess.startTimeMs).coerceAtLeast(250L)) / 1000f
         val speedMBps = (recvSess.totalBytes / 1_000_000f) / elapsedSec
 
@@ -1620,9 +1715,13 @@ class RealNearbyTransferManager(
     }
 
     private fun cleanupReceivePayloads(recvSess: ReceiveSession) {
-        recvSess.receivedFilePayloads.values.forEach { payload ->
-            IncomingPayloadStorage.safeDeletePayload(context, payload)
-        }
+        val tracked = recvSess.manifestTracker.cancelSession("Receive session cleanup")
+            .filterIsInstance<Payload>()
+        (tracked + recvSess.receivedFilePayloads.values)
+            .distinctBy { it.id }
+            .forEach { payload ->
+                IncomingPayloadStorage.safeDeletePayload(context, payload)
+            }
     }
 
     override fun cancelTransfer() {

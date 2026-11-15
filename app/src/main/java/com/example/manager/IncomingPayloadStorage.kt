@@ -13,6 +13,7 @@ import androidx.core.content.FileProvider
 import com.example.data.DiagnosticsRepository
 import com.example.model.DiagnosticCategory
 import com.example.model.DiagnosticCodes
+import com.example.model.ErrorSeverity
 import com.example.model.TransferItemMetadata
 import com.example.model.TransferPipelineStage
 import com.example.model.TransferVerificationException
@@ -32,7 +33,7 @@ sealed class IncomingPayloadSource {
 }
 
 data class SavedPayloadResult(
-    val shareableUri: Uri,
+    val shareableUri: Uri?,
     val permanentFile: File,
     val sha256Hash: String,
     val bytesCopied: Long,
@@ -45,19 +46,20 @@ data class SavedPayloadResult(
  * Modern Android Scoped-Storage compliant handler for incoming Nearby FILE payloads.
  *
  * CRITICAL FIX FOR PHYSICAL PHONES (Android 10–15 EACCES bug):
- * Always opens [Payload.File.asUri] via [ContentResolver.openInputStream] first rather than
- * POSIX [FileInputStream] on `/storage/emulated/0/Download/.nearby/...` which fails with
- * `open failed: EACCES (Permission denied)` after Nearby transport hits 100%.
+ * Always opens [Payload.File.asUri] via [ContentResolver.openInputStream] first, or
+ * [Payload.File.asParcelFileDescriptor] second. On Android 10+ (API 29+), raw
+ * `Payload.File.asJavaFile()` fallback is strictly disallowed and fails cleanly with [GS_FILE_002].
  *
  * Pipeline guarantees:
- * 1. Copies via URI stream to app-private staging file while computing SHA-256 in a single streaming pass.
- * 2. Verifies exact byte length against metadata when provided (`GS-FILE-004`).
- * 3. Verifies SHA-256 digest strictly before accepting (`GS-FILE-003`), deleting any corrupted bytes.
- * 4. Persists verified copy to app-private `files/received/` with sanitized unique filename.
- * 5. Safely requests cleanup of original Nearby content URI after stream closure.
+ * 1. Copies via URI/PFD stream to app-private staging file while computing SHA-256 in one pass.
+ * 2. Verifies exact byte length against metadata (`GS-FILE-004`).
+ * 3. Verifies SHA-256 digest strictly (`GS-FILE-003`), discarding corrupted staging bytes.
+ * 4. Commits verified copy to a unique non-colliding file in app-private `files/received/`
+ *    (never overwriting any existing verified file).
+ * 5. Cleans up original Nearby staging URI/PFD ONLY AFTER app-private copy, verification,
+ *    and app-private commit succeed (or inside error cleanup after stream closure).
  * 6. Exports verified copy to public `Downloads/GestoShare` via `MediaStore` (`IS_PENDING` 1 -> 0 on API 29+)
- *    ONLY after cryptographic verification succeeds. If MediaStore export fails, logs `GS-FILE-006`
- *    while preserving the verified private file.
+ *    ONLY after verification succeeds. Never returns raw `file://` URIs as shareable external URIs.
  */
 class IncomingPayloadStorage(
     private val context: Context,
@@ -67,21 +69,83 @@ class IncomingPayloadStorage(
         private const val TAG = "IncomingPayloadStorage"
         private const val COPY_BUFFER_BYTES = 64 * 1024
 
-        fun resolvePayloadSource(payload: Payload): IncomingPayloadSource? {
-            val payloadFile = payload.asFile() ?: return null
-            // CRITICAL: Prefer URI (content://) over raw File path on Android Q+ scoped storage
-            payloadFile.asUri()?.let { uri ->
-                return IncomingPayloadSource.ContentUriSource(uri)
+        /**
+         * Resolves a Nearby [Payload.Type.FILE] source safely for the given [sdkInt].
+         *
+         * Priority:
+         * 1. [Payload.File.asUri] (`content://`)
+         * 2. [Payload.File.asParcelFileDescriptor]
+         * 3. On API < 29 only: readable [Payload.File.asJavaFile]
+         *
+         * On Android 10+ (`sdkInt >= Build.VERSION_CODES.Q`), if neither URI nor PFD is
+         * exposed, explicitly throws [TransferVerificationException] with [DiagnosticCodes.GS_FILE_002]
+         * rather than attempting POSIX file reads into `/Download/.nearby`.
+         */
+        fun resolvePayloadSourceOrThrow(
+            payload: Payload,
+            sdkInt: Int = Build.VERSION.SDK_INT
+        ): IncomingPayloadSource {
+            val payloadFile = payload.asFile()
+                ?: throw TransferVerificationException(
+                    code = DiagnosticCodes.GS_FILE_001,
+                    category = DiagnosticCategory.FILE_IO,
+                    message = "Nearby payload ${payload.id} is not a FILE payload.",
+                    suggestedAction = "Retry transfer with a valid file payload."
+                )
+
+            return resolvePayloadComponentsOrThrow(
+                payloadId = payload.id,
+                uri = payloadFile.asUri(),
+                pfd = payloadFile.asParcelFileDescriptor(),
+                javaFile = payloadFile.asJavaFile(),
+                sdkInt = sdkInt
+            )
+        }
+
+        internal fun resolvePayloadComponentsOrThrow(
+            payloadId: Long,
+            uri: Uri?,
+            pfd: ParcelFileDescriptor?,
+            javaFile: File?,
+            sdkInt: Int = Build.VERSION.SDK_INT
+        ): IncomingPayloadSource {
+            uri?.takeIf { it.scheme == ContentResolver.SCHEME_CONTENT }?.let {
+                return IncomingPayloadSource.ContentUriSource(it)
             }
-            payloadFile.asParcelFileDescriptor()?.let { pfd ->
-                return IncomingPayloadSource.PfdSource(pfd)
+            pfd?.let {
+                return IncomingPayloadSource.PfdSource(it)
             }
-            val javaFile = payloadFile.asJavaFile()
+
+            if (sdkInt >= Build.VERSION_CODES.Q) {
+                throw TransferVerificationException(
+                    code = DiagnosticCodes.GS_FILE_002,
+                    category = DiagnosticCategory.FILE_IO,
+                    message = "Scoped storage (API $sdkInt) disallows raw Nearby file path access${javaFile?.let { " (${it.name})" } ?: ""}; neither content:// URI nor ParcelFileDescriptor was provided.",
+                    suggestedAction = "Payload must be opened via ContentResolver.openInputStream(uri) or ParcelFileDescriptor on Android 10+."
+                )
+            }
+
             if (javaFile != null && javaFile.canRead()) {
                 return IncomingPayloadSource.AppPrivateFileSource(javaFile)
             }
-            return null
+            if (uri != null) {
+                return IncomingPayloadSource.ContentUriSource(uri)
+            }
+
+            throw TransferVerificationException(
+                code = DiagnosticCodes.GS_FILE_001,
+                category = DiagnosticCategory.FILE_IO,
+                message = "Nearby payload $payloadId exposed no readable URI, PFD, or readable legacy file.",
+                suggestedAction = "Ensure payload uses ContentResolver URI stream and retry."
+            )
         }
+
+        fun resolvePayloadSource(
+            payload: Payload,
+            sdkInt: Int = Build.VERSION.SDK_INT
+        ): IncomingPayloadSource? = runCatching {
+            resolvePayloadSourceOrThrow(payload, sdkInt)
+        }.getOrNull()
 
         fun safeDeletePayload(context: Context, payload: Payload) {
             val payloadFile = payload.asFile() ?: return
@@ -103,7 +167,8 @@ class IncomingPayloadStorage(
         meta: TransferItemMetadata,
         source: IncomingPayloadSource,
         onStageChange: (TransferPipelineStage, String) -> Unit = { _, _ -> },
-        customMediaStoreExporter: ((File, String, String) -> Pair<Uri?, String?>)? = null
+        customMediaStoreExporter: ((File, String, String) -> Pair<Uri?, String?>)? = null,
+        customFileProviderResolver: ((File) -> Uri)? = null
     ): SavedPayloadResult {
         val resolver = context.contentResolver
         val safeName = HashUtil.sanitizeFileName(meta.name, "received_file")
@@ -121,8 +186,29 @@ class IncomingPayloadStorage(
         val digest = MessageDigest.getInstance("SHA-256")
         var totalCopied = 0L
 
+        fun cleanupSourceQuietly() {
+            when (source) {
+                is IncomingPayloadSource.ContentUriSource -> {
+                    if (source.uri.scheme == ContentResolver.SCHEME_CONTENT) {
+                        try {
+                            resolver.delete(source.uri, null, null)
+                        } catch (e: Exception) {
+                            Log.d(TAG, "Non-fatal cleanup notice for Nearby URI: ${e.message}")
+                        }
+                    }
+                }
+                is IncomingPayloadSource.PfdSource -> {
+                    try {
+                        source.pfd.close()
+                    } catch (_: Exception) {
+                    }
+                }
+                is IncomingPayloadSource.AppPrivateFileSource -> Unit
+            }
+        }
+
         try {
-            // Stage 1: COPY FROM CONTENT URI STREAM TO APP-PRIVATE STAGING
+            // Stage 1: COPY FROM URI / PFD STREAM TO APP-PRIVATE STAGING
             onStageChange(
                 TransferPipelineStage.COPYING_TO_PRIVATE_STORAGE,
                 "Copying ${meta.name} via scoped storage stream..."
@@ -131,6 +217,16 @@ class IncomingPayloadStorage(
             val openedStream: InputStream = try {
                 when (source) {
                     is IncomingPayloadSource.ContentUriSource -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                            source.uri.scheme != ContentResolver.SCHEME_CONTENT
+                        ) {
+                            throw TransferVerificationException(
+                                code = DiagnosticCodes.GS_FILE_002,
+                                category = DiagnosticCategory.FILE_IO,
+                                message = "Scoped storage (API ${Build.VERSION.SDK_INT}) rejects unsupported ${source.uri.scheme ?: "unknown"}:// URI source; content:// URI required.",
+                                suggestedAction = "Open incoming Nearby payload using a content:// URI via ContentResolver.openInputStream() or ParcelFileDescriptor."
+                            )
+                        }
                         resolver.openInputStream(source.uri)
                             ?: throw TransferVerificationException(
                                 code = DiagnosticCodes.GS_FILE_001,
@@ -143,6 +239,16 @@ class IncomingPayloadStorage(
                         ParcelFileDescriptor.AutoCloseInputStream(source.pfd)
                     }
                     is IncomingPayloadSource.AppPrivateFileSource -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                            source.file.absolutePath.contains(".nearby")
+                        ) {
+                            throw TransferVerificationException(
+                                code = DiagnosticCodes.GS_FILE_002,
+                                category = DiagnosticCategory.FILE_IO,
+                                message = "Blocked raw .nearby FileInputStream on Android Q+; URI stream required.",
+                                suggestedAction = "Use ContentResolver.openInputStream(uri) instead of raw POSIX path."
+                            )
+                        }
                         FileInputStream(source.file)
                     }
                 }
@@ -169,36 +275,38 @@ class IncomingPayloadStorage(
                 )
             }
 
-            openedStream.use { input ->
-                FileOutputStream(tempVerifyFile).use { output ->
-                    val buf = ByteArray(COPY_BUFFER_BYTES)
-                    var read: Int
-                    while (input.read(buf).also { read = it } != -1) {
-                        output.write(buf, 0, read)
-                        digest.update(buf, 0, read)
-                        totalCopied += read
+            try {
+                openedStream.use { input ->
+                    FileOutputStream(tempVerifyFile).use { output ->
+                        val buf = ByteArray(COPY_BUFFER_BYTES)
+                        var read: Int
+                        while (input.read(buf).also { read = it } != -1) {
+                            output.write(buf, 0, read)
+                            digest.update(buf, 0, read)
+                            totalCopied += read
+                        }
+                        output.fd.sync()
                     }
-                    output.fd.sync()
                 }
+            } catch (e: TransferVerificationException) {
+                throw e
+            } catch (e: Exception) {
+                throw TransferVerificationException(
+                    code = DiagnosticCodes.GS_FILE_001,
+                    category = DiagnosticCategory.FILE_IO,
+                    message = "Failed copying incoming stream for '${meta.name}': ${e.message ?: e.javaClass.simpleName}",
+                    suggestedAction = "Keep devices nearby and retry transfer.",
+                    cause = e
+                )
             }
 
-            // Safely remove source URI staged by Nearby only after copy stream closes cleanly
-            if (source is IncomingPayloadSource.ContentUriSource) {
-                try {
-                    resolver.delete(source.uri, null, null)
-                } catch (e: Exception) {
-                    Log.d(TAG, "Non-fatal cleanup notice for Nearby URI: ${e.message}")
-                }
-            }
-
-            // Stage 2: SIZE & CRYPTOGRAPHIC SHA-256 VERIFICATION
+            // Stage 2: SIZE & CRYPTOGRAPHIC SHA-256 VERIFICATION (before cleaning source or committing permanent file)
             onStageChange(
                 TransferPipelineStage.VERIFYING_INTEGRITY,
                 "Verifying ${totalCopied}B and SHA-256 for ${meta.name}..."
             )
 
             if (meta.sizeBytes > 0L && totalCopied != meta.sizeBytes) {
-                tempVerifyFile.delete()
                 throw TransferVerificationException(
                     code = DiagnosticCodes.GS_FILE_004,
                     category = DiagnosticCategory.VERIFICATION,
@@ -209,7 +317,6 @@ class IncomingPayloadStorage(
 
             val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
             if (meta.sha256.isNotBlank() && !HashUtil.verifyHash(actualHash, meta.sha256)) {
-                tempVerifyFile.delete()
                 throw TransferVerificationException(
                     code = DiagnosticCodes.GS_FILE_003,
                     category = DiagnosticCategory.VERIFICATION,
@@ -218,24 +325,67 @@ class IncomingPayloadStorage(
                 )
             }
 
-            // Stage 3: COMMIT VERIFIED COPY INTO APP-PRIVATE RECEIVED DIRECTORY
+            // Stage 3: COMMIT VERIFIED COPY INTO APP-PRIVATE RECEIVED DIRECTORY (never overwrites existing verified file)
             val receivedDir = File(context.filesDir, "received").apply { mkdirs() }
-            val permanentFile = createUniqueFile(receivedDir, safeName)
-            FileInputStream(tempVerifyFile).use { input ->
-                FileOutputStream(permanentFile).use { output ->
-                    input.copyTo(output, COPY_BUFFER_BYTES)
-                }
+            val permanentFile = synchronized(this) {
+                createUniqueFile(receivedDir, safeName)
             }
-            tempVerifyFile.delete()
+            val commitTemp = File(receivedDir, ".commit_${UUID.randomUUID().toString().take(8)}_$safeName")
+            try {
+                FileInputStream(tempVerifyFile).use { input ->
+                    FileOutputStream(commitTemp).use { output ->
+                        input.copyTo(output, COPY_BUFFER_BYTES)
+                        output.fd.sync()
+                    }
+                }
+                if (!commitTemp.renameTo(permanentFile)) {
+                    FileInputStream(commitTemp).use { input ->
+                        FileOutputStream(permanentFile).use { output ->
+                            input.copyTo(output, COPY_BUFFER_BYTES)
+                            output.fd.sync()
+                        }
+                    }
+                    commitTemp.delete()
+                }
+            } catch (e: Exception) {
+                commitTemp.delete()
+                if (permanentFile.exists() && permanentFile.length() == 0L) {
+                    permanentFile.delete()
+                }
+                throw e
+            } finally {
+                tempVerifyFile.delete()
+            }
 
-            val privateShareUri = try {
-                FileProvider.getUriForFile(
-                    context,
-                    "${context.packageName}.fileprovider",
-                    permanentFile
+            // Clean up Nearby staging URI/PFD ONLY AFTER copy + verification + app-private commit succeed
+            cleanupSourceQuietly()
+
+            val privateShareUri: Uri? = try {
+                val resolved = customFileProviderResolver?.invoke(permanentFile)
+                    ?: FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        permanentFile
+                    )
+                if (resolved.scheme == ContentResolver.SCHEME_CONTENT) {
+                    resolved
+                } else {
+                    Log.w(TAG, "FileProvider returned non-content URI scheme (${resolved.scheme}); suppressing raw file URI.")
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "FileProvider.getUriForFile failed for ${permanentFile.name}", e)
+                diagnostics?.recordError(
+                    code = DiagnosticCodes.GS_FILE_008,
+                    category = DiagnosticCategory.FILE_IO,
+                    sourceComponent = TAG,
+                    operation = "resolveFileProviderUri",
+                    summary = "FileProvider could not generate content:// URI for '${permanentFile.name}'; raw file:// fallback suppressed.",
+                    technicalMessage = e.localizedMessage ?: e.javaClass.simpleName,
+                    severity = ErrorSeverity.WARNING,
+                    relatedTransferId = transferId
                 )
-            } catch (_: Exception) {
-                Uri.fromFile(permanentFile)
+                null
             }
 
             // Stage 4: EXPORT VERIFIED FILE TO PUBLIC Downloads/GestoShare (ONLY AFTER SHA-256 PASSES)
@@ -262,7 +412,7 @@ class IncomingPayloadStorage(
                 val res = exportToPublicDownloads(permanentFile, permanentFile.name, meta.mimeType)
                 exportedUri = res.first
                 exportFailureNote = res.second
-                exportOk = (exportedUri != null && exportFailureNote == null)
+                exportOk = (res.second == null && (exportedUri != null || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q))
             }
 
             if (!exportOk) {
@@ -271,7 +421,7 @@ class IncomingPayloadStorage(
                 diagnostics?.recordError(
                     code = DiagnosticCodes.GS_FILE_006,
                     category = DiagnosticCategory.STORAGE,
-                    sourceComponent = "IncomingPayloadStorage",
+                    sourceComponent = TAG,
                     operation = "exportToPublicDownloads",
                     summary = warnMsg,
                     technicalMessage = exportFailureNote ?: warnMsg,
@@ -285,8 +435,12 @@ class IncomingPayloadStorage(
                 )
             }
 
+            // Never leak a file:// URI as shareableUri: only content:// URIs from MediaStore or FileProvider
+            val safeExportShareUri = exportedUri?.takeIf { it.scheme == ContentResolver.SCHEME_CONTENT }
+            val safeShareableUri = safeExportShareUri ?: privateShareUri
+
             return SavedPayloadResult(
-                shareableUri = exportedUri ?: privateShareUri,
+                shareableUri = safeShareableUri,
                 permanentFile = permanentFile,
                 sha256Hash = actualHash,
                 bytesCopied = totalCopied,
@@ -296,6 +450,7 @@ class IncomingPayloadStorage(
             )
         } catch (e: Exception) {
             tempVerifyFile.delete()
+            cleanupSourceQuietly()
             throw e
         }
     }
@@ -348,7 +503,11 @@ class IncomingPayloadStorage(
                         input.copyTo(output, COPY_BUFFER_BYTES)
                     }
                 }
-                Uri.fromFile(dest) to null
+                // Return FileProvider content:// URI if covered by file_paths.xml, or null instead of file:// URI
+                val contentUri = runCatching {
+                    FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", dest)
+                }.getOrNull()
+                contentUri to null
             }
         } catch (e: Exception) {
             null to (e.localizedMessage ?: e.javaClass.simpleName)
