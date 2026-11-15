@@ -1,9 +1,13 @@
 package com.example
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -40,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,26 +57,27 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.AppSettingsState
 import com.example.ui.AirShareViewModel
 import com.example.ui.ScreenRoute
 import com.example.ui.components.AirShareBottomNav
 import com.example.ui.components.AirShareTopBar
+import com.example.ui.screens.AboutScreen
 import com.example.ui.screens.ContentSelectionScreen
+import com.example.ui.screens.DiagnosticsScreen
 import com.example.ui.screens.GestureControlScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.NearbyDevicesScreen
+import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.SplashScreen
 import com.example.ui.screens.TransferHistoryScreen
 import com.example.ui.screens.TransferScreen
-import com.example.ui.theme.DarkSurface
-import com.example.ui.theme.EmeraldSuccess
 import com.example.ui.theme.GestoGlassBackground
+import com.example.ui.theme.GestoTheme
 import com.example.ui.theme.MyApplicationTheme
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.RoseError
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.glassSurface
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -81,11 +87,17 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        handleIncomingShareIntent(intent)
+        if (savedInstanceState == null) {
+            handleIncomingShareIntent(intent)
+        }
 
         setContent {
-            MyApplicationTheme {
-                AirShareApp(viewModel = viewModel)
+            val settingsState by viewModel.settingsState.collectAsStateWithLifecycle()
+            MyApplicationTheme(darkTheme = settingsState.isDarkTheme) {
+                AirShareApp(
+                    viewModel = viewModel,
+                    settingsState = settingsState
+                )
             }
         }
     }
@@ -151,7 +163,11 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun AirShareApp(viewModel: AirShareViewModel) {
+fun AirShareApp(
+    viewModel: AirShareViewModel,
+    settingsState: AppSettingsState
+) {
+    val palette = GestoTheme.colors
     val currentScreen by viewModel.currentScreen.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val stagedItems by viewModel.stagedItems.collectAsStateWithLifecycle()
@@ -160,6 +176,7 @@ fun AirShareApp(viewModel: AirShareViewModel) {
     val isDiscovering by viewModel.nearbyManager.isDiscovering.collectAsStateWithLifecycle()
     val isAdvertising by viewModel.nearbyManager.isAdvertising.collectAsStateWithLifecycle()
     val activeTransfer by viewModel.activeTransfer.collectAsStateWithLifecycle()
+    val endpointTransfers by viewModel.endpointTransfers.collectAsStateWithLifecycle()
     val incomingTransferOffer by viewModel.incomingTransferOffer.collectAsStateWithLifecycle()
     val historyTransfers by viewModel.historyTransfers.collectAsStateWithLifecycle()
 
@@ -180,11 +197,19 @@ fun AirShareApp(viewModel: AirShareViewModel) {
 
     val pendingSession by viewModel.pendingSession.collectAsStateWithLifecycle()
     val connectedDevice by viewModel.connectedDevice.collectAsStateWithLifecycle()
+    val connectedDevices by viewModel.connectedDevices.collectAsStateWithLifecycle()
+    val recentDevices by viewModel.recentDevices.collectAsStateWithLifecycle()
+    val multiSelectMode by viewModel.multiSelectMode.collectAsStateWithLifecycle()
+    val multiSelectRecipientIds by viewModel.multiSelectRecipientIds.collectAsStateWithLifecycle()
     val receivedMessages by viewModel.receivedMessages.collectAsStateWithLifecycle()
     val nearbyStatusMessage by viewModel.nearbyStatusMessage.collectAsStateWithLifecycle()
     val isNearbyAvailable by viewModel.isNearbyAvailable.collectAsStateWithLifecycle()
 
+    val errorEvents by viewModel.errorEvents.collectAsStateWithLifecycle()
+    val operationalLogs by viewModel.operationalLogs.collectAsStateWithLifecycle()
+
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
     val nearbyPermissions = remember {
         when {
@@ -207,6 +232,10 @@ fun AirShareApp(viewModel: AirShareViewModel) {
         }
     }
 
+    val onboardingPermissions = remember(nearbyPermissions) {
+        (nearbyPermissions.toList() + android.Manifest.permission.CAMERA).distinct().toTypedArray()
+    }
+
     var pendingActionAfterPermission by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     val nearbyPermissionLauncher = rememberLauncherForActivityResult(
@@ -215,8 +244,26 @@ fun AirShareApp(viewModel: AirShareViewModel) {
             val allGranted = permissionsMap.values.all { it }
             if (allGranted) {
                 pendingActionAfterPermission?.invoke()
+            } else {
+                Toast.makeText(
+                    context,
+                    "Nearby permissions are needed for offline device discovery.",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
             pendingActionAfterPermission = null
+        }
+    )
+
+    val onboardingPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+        onResult = { permissionsMap ->
+            val grantedCount = permissionsMap.values.count { it }
+            Toast.makeText(
+                context,
+                "$grantedCount of ${permissionsMap.size} permissions granted.",
+                Toast.LENGTH_SHORT
+            ).show()
         }
     )
 
@@ -234,32 +281,67 @@ fun AirShareApp(viewModel: AirShareViewModel) {
         }
     }
 
-    BackHandler(enabled = currentScreen != ScreenRoute.HOME) {
+    fun copyErrorReportToClipboard(text: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        clipboard?.setPrimaryClip(ClipData.newPlainText("GestoShare Error Report", text))
+        Toast.makeText(context, "Error report copied to clipboard", Toast.LENGTH_SHORT).show()
+    }
+
+    fun shareDiagnosticsExport(asJson: Boolean) {
+        coroutineScope.launch {
+            val uri = viewModel.prepareDiagnosticsExportUri(context, asJson)
+            if (uri == null) {
+                Toast.makeText(context, "Unable to create diagnostics export file.", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val mimeType = if (asJson) "application/json" else "text/plain"
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = mimeType
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(
+                    Intent.EXTRA_SUBJECT,
+                    "GestoShare Diagnostics (${if (asJson) "JSON" else "TXT"})"
+                )
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(shareIntent, "Export GestoShare Diagnostics"))
+        }
+    }
+
+    BackHandler(enabled = currentScreen != ScreenRoute.HOME && currentScreen != ScreenRoute.SPLASH) {
         viewModel.navigateBack()
     }
+
+    val showChrome = currentScreen != ScreenRoute.SPLASH && currentScreen != ScreenRoute.ONBOARDING
 
     GestoGlassBackground {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             topBar = {
-                AirShareTopBar(
-                    currentRoute = currentScreen,
-                    isAdvertising = isAdvertising,
-                    onBackClick = { viewModel.navigateBack() },
-                    onSettingsClick = { viewModel.navigateTo(ScreenRoute.SETTINGS) },
-                    onToggleAdvertising = {
-                        checkAndExecuteWithNearbyPermissions {
-                            viewModel.toggleNearbyAdvertising()
+                if (showChrome) {
+                    AirShareTopBar(
+                        currentRoute = currentScreen,
+                        isAdvertising = isAdvertising,
+                        errorCount = errorEvents.size,
+                        onBackClick = { viewModel.navigateBack() },
+                        onSettingsClick = { viewModel.navigateTo(ScreenRoute.SETTINGS) },
+                        onDiagnosticsClick = { viewModel.navigateTo(ScreenRoute.DIAGNOSTICS) },
+                        onToggleAdvertising = {
+                            checkAndExecuteWithNearbyPermissions {
+                                viewModel.toggleNearbyAdvertising()
+                            }
                         }
-                    }
-                )
+                    )
+                }
             },
             bottomBar = {
-                AirShareBottomNav(
-                    currentRoute = currentScreen,
-                    onNavigate = { route -> viewModel.navigateTo(route) },
-                    modifier = Modifier.navigationBarsPadding()
-                )
+                if (showChrome) {
+                    AirShareBottomNav(
+                        currentRoute = currentScreen,
+                        onNavigate = { route -> viewModel.navigateTo(route) },
+                        modifier = Modifier.navigationBarsPadding()
+                    )
+                }
             },
             containerColor = Color.Transparent
         ) { innerPadding ->
@@ -269,11 +351,28 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                     .padding(innerPadding)
             ) {
                 when (currentScreen) {
+                    ScreenRoute.SPLASH -> {
+                        SplashScreen(
+                            onFinished = { viewModel.advanceFromSplash() }
+                        )
+                    }
+
+                    ScreenRoute.ONBOARDING -> {
+                        OnboardingScreen(
+                            onComplete = { viewModel.completeOnboarding() },
+                            onRequestPermissions = {
+                                onboardingPermissionLauncher.launch(onboardingPermissions)
+                            }
+                        )
+                    }
+
                     ScreenRoute.HOME -> {
                         HomeScreen(
                             deviceName = deviceName,
                             stagedItems = stagedItems,
                             discoveredDevices = discoveredDevices,
+                            connectedDevices = connectedDevices,
+                            errorCount = errorEvents.size,
                             isAdvertising = isAdvertising,
                             recentTransfers = historyTransfers,
                             onNavigate = { route -> viewModel.navigateTo(route) },
@@ -305,13 +404,17 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                             discoveredDevices = discoveredDevices,
                             selectedDevice = targetDevice,
                             connectedDevice = connectedDevice,
+                            connectedDevices = connectedDevices,
                             pendingSession = pendingSession,
+                            recentDevices = recentDevices,
                             receivedMessages = receivedMessages,
                             statusMessage = nearbyStatusMessage,
                             isDiscovering = isDiscovering,
                             isAdvertising = isAdvertising,
                             isNearbyAvailable = isNearbyAvailable,
                             stagedItems = stagedItems,
+                            isMultiSelectMode = multiSelectMode,
+                            multiSelectRecipientIds = multiSelectRecipientIds,
                             onStartDiscovery = {
                                 checkAndExecuteWithNearbyPermissions {
                                     viewModel.startNearbyDiscovery()
@@ -331,10 +434,18 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                             onAcceptConnection = { endpointId -> viewModel.acceptNearbyConnection(endpointId) },
                             onRejectConnection = { endpointId -> viewModel.rejectNearbyConnection(endpointId) },
                             onDisconnectDevice = { endpointId -> viewModel.disconnectNearbyDevice(endpointId) },
+                            onForgetDevice = { endpointId -> viewModel.forgetNearbyDevice(endpointId) },
+                            onForgetRecentDevice = { key -> viewModel.forgetRecentDevice(key) },
                             onSelectDevice = { dev -> viewModel.selectTargetDevice(dev) },
+                            onToggleMultiSelectMode = { viewModel.toggleMultiSelectMode() },
+                            onToggleMultiSelectRecipient = { dev -> viewModel.toggleMultiSelectRecipient(dev) },
                             onSendTextMessage = { msg -> viewModel.sendNearbyTextMessage(msg) },
+                            onSendTextMessageTo = { endpointId, msg ->
+                                viewModel.sendNearbyTextMessageTo(endpointId, msg)
+                            },
                             onSendPingTest = { viewModel.sendNearbyPingTest() },
                             onExecuteTransfer = { dev -> viewModel.executeTransfer(dev) },
+                            onExecuteMultiTransfer = { viewModel.executeMultiTransfer() },
                             onNavigate = { route -> viewModel.navigateTo(route) }
                         )
                     }
@@ -358,6 +469,10 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                             discoveredDevices = discoveredDevices,
                             selectedDevice = targetDevice,
                             connectedDevice = connectedDevice,
+                            connectedDevices = connectedDevices,
+                            isMultiSelectMode = multiSelectMode,
+                            multiSelectRecipientIds = multiSelectRecipientIds,
+                            useFrontCamera = settingsState.useFrontCamera,
                             pendingSession = pendingSession,
                             isTrackingHand = isTrackingHand,
                             handTrackingState = handTrackingState,
@@ -366,6 +481,7 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                             onSelectOperationMode = { viewModel.setGestureOperationMode(it) },
                             onUpdateConfidenceThreshold = { viewModel.updateConfidenceThreshold(it) },
                             onUpdateConsecutiveFrames = { viewModel.updateStabilizerConsecutiveFrames(it) },
+                            onToggleCameraFacing = { viewModel.toggleCameraFacing() },
                             onClearPredictionHistory = { viewModel.clearPredictionHistory() },
                             onDismissFeedback = { viewModel.clearSessionFeedback() },
                             onStartDiscovery = {
@@ -374,6 +490,8 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                                 }
                             },
                             onSelectDevice = { dev -> viewModel.selectTargetDevice(dev) },
+                            onToggleMultiSelectMode = { viewModel.toggleMultiSelectMode() },
+                            onToggleMultiRecipient = { dev -> viewModel.toggleMultiSelectRecipient(dev) },
                             onRequestConnection = { dev ->
                                 checkAndExecuteWithNearbyPermissions {
                                     viewModel.requestNearbyConnection(dev)
@@ -392,7 +510,11 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                     ScreenRoute.TRANSFER -> {
                         TransferScreen(
                             activeTransfer = activeTransfer,
+                            endpointTransfers = endpointTransfers,
                             onCancelTransfer = { viewModel.cancelActiveTransfer() },
+                            onCancelEndpointTransfer = { endpointId ->
+                                viewModel.cancelEndpointTransfer(endpointId)
+                            },
                             onRetryTransfer = { viewModel.retryActiveTransfer() },
                             onOpenReceivedFile = { uriString, mimeType ->
                                 viewModel.openReceivedFile(context, uriString, mimeType)
@@ -413,7 +535,50 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                     ScreenRoute.SETTINGS -> {
                         SettingsScreen(
                             currentDeviceName = deviceName,
-                            onUpdateDeviceName = { name -> viewModel.updateDeviceName(name) }
+                            settingsState = settingsState,
+                            errorCount = errorEvents.size,
+                            onUpdateDeviceName = { name -> viewModel.updateDeviceName(name) },
+                            onToggleDarkTheme = { dark -> viewModel.toggleDarkTheme(dark) },
+                            onUpdateConfidenceThreshold = { viewModel.updateConfidenceThreshold(it) },
+                            onUpdateConsecutiveFrames = { viewModel.updateStabilizerConsecutiveFrames(it) },
+                            onUpdateCooldownMs = { viewModel.updateStabilizerCooldownMs(it) },
+                            onUpdateHoldDurationMs = { viewModel.updateStabilizerHoldDurationMs(it) },
+                            onToggleCameraFacing = { viewModel.toggleCameraFacing() },
+                            onToggleHapticFeedback = { viewModel.toggleHapticFeedback(it) },
+                            onToggleSoundFeedback = { viewModel.toggleSoundFeedback(it) },
+                            onToggleGestureTransferMode = { enabled ->
+                                viewModel.setGestureOperationMode(
+                                    if (enabled) com.example.model.GestureOperationMode.GESTURE_TRANSFER
+                                    else com.example.model.GestureOperationMode.DEBUG_DRY_RUN
+                                )
+                            },
+                            onOpenDiagnostics = { viewModel.navigateTo(ScreenRoute.DIAGNOSTICS) },
+                            onOpenAbout = { viewModel.navigateTo(ScreenRoute.ABOUT) },
+                            onReplayOnboarding = { viewModel.replayOnboarding() }
+                        )
+                    }
+
+                    ScreenRoute.DIAGNOSTICS -> {
+                        val nearbySummary = "${nearbyStatusMessage} (connected=${connectedDevices.size}, discovered=${discoveredDevices.size})"
+                        DiagnosticsScreen(
+                            errorEvents = errorEvents,
+                            operationalLogs = operationalLogs,
+                            modelSummary = viewModel.onnxDiagnostics.statusMessage,
+                            nearbySummary = nearbySummary,
+                            onCopyErrorReport = { event ->
+                                copyErrorReportToClipboard(viewModel.formatSingleErrorReport(event))
+                            },
+                            onExportDiagnosticsTxt = { shareDiagnosticsExport(asJson = false) },
+                            onExportDiagnosticsJson = { shareDiagnosticsExport(asJson = true) },
+                            onDeleteErrorEvent = { id -> viewModel.deleteDiagnosticEvent(id) },
+                            onClearAllDiagnostics = { viewModel.clearAllDiagnostics() }
+                        )
+                    }
+
+                    ScreenRoute.ABOUT -> {
+                        AboutScreen(
+                            onNavigate = { route -> viewModel.navigateTo(route) },
+                            onReplayOnboarding = { viewModel.replayOnboarding() }
                         )
                     }
                 }
@@ -428,13 +593,17 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                     Box(
                         modifier = Modifier
                             .size(48.dp)
-                            .glassSurface(cornerRadius = 24.dp, fillColor = Color(0x88060B18), borderAccent = NeonCyan),
+                            .glassSurface(
+                                cornerRadius = 24.dp,
+                                fillColor = palette.glassFillElevated,
+                                borderAccent = palette.accentPrimary
+                            ),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.Download,
                             contentDescription = "Incoming Transfer",
-                            tint = NeonCyan,
+                            tint = palette.accentPrimary,
                             modifier = Modifier.size(24.dp)
                         )
                     }
@@ -442,7 +611,7 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                 title = {
                     Text(
                         text = "Incoming File Transfer",
-                        color = TextPrimary,
+                        color = palette.textPrimary,
                         fontWeight = FontWeight.Bold
                     )
                 },
@@ -451,7 +620,7 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                         Text(
                             text = "${offer.senderName} wants to send ${offer.items.size} item(s) (${viewModel.contentImportManager.formatFileSize(offer.totalBytes)}).",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = TextSecondary
+                            color = palette.textSecondary
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                         offer.items.take(4).forEach { meta ->
@@ -459,7 +628,11 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 3.dp)
-                                    .glassSurface(cornerRadius = 8.dp, fillColor = Color(0x66060B18), borderAccent = Color.White.copy(alpha = 0.14f))
+                                    .glassSurface(
+                                        cornerRadius = 8.dp,
+                                        fillColor = palette.glassFill,
+                                        borderAccent = palette.glassBorder
+                                    )
                                     .padding(horizontal = 10.dp, vertical = 6.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
@@ -467,7 +640,7 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                                 Text(
                                     text = meta.name,
                                     fontSize = 12.sp,
-                                    color = TextPrimary,
+                                    color = palette.textPrimary,
                                     maxLines = 1,
                                     modifier = Modifier.weight(1f)
                                 )
@@ -475,7 +648,7 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                                     text = viewModel.contentImportManager.formatFileSize(meta.sizeBytes),
                                     fontSize = 11.sp,
                                     fontFamily = FontFamily.Monospace,
-                                    color = NeonCyan
+                                    color = palette.accentPrimary
                                 )
                             }
                         }
@@ -484,7 +657,7 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                             Text(
                                 text = "+ ${offer.items.size - 4} more file(s)",
                                 fontSize = 11.sp,
-                                color = TextSecondary
+                                color = palette.textSecondary
                             )
                         }
                     }
@@ -493,7 +666,10 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                     Button(
                         onClick = { viewModel.acceptIncomingTransfer(offer.transferId) },
                         modifier = Modifier.testTag("accept_incoming_transfer_button"),
-                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldSuccess, contentColor = Color.White),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = palette.success,
+                            contentColor = Color.White
+                        ),
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Icon(imageVector = Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -505,13 +681,13 @@ fun AirShareApp(viewModel: AirShareViewModel) {
                     OutlinedButton(
                         onClick = { viewModel.rejectIncomingTransfer(offer.transferId) },
                         modifier = Modifier.testTag("decline_incoming_transfer_button"),
-                        border = BorderStroke(1.dp, RoseError),
+                        border = BorderStroke(1.dp, palette.error),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Decline", color = RoseError)
+                        Text("Decline", color = palette.error)
                     }
                 },
-                containerColor = DarkSurface
+                containerColor = palette.dialogSurface
             )
         }
     }

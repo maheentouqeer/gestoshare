@@ -47,16 +47,8 @@ import androidx.compose.ui.unit.sp
 import com.example.model.TransferDirection
 import com.example.model.TransferRecord
 import com.example.model.TransferStatus
-import com.example.ui.theme.DarkBackground
-import com.example.ui.theme.DarkSurface
-import com.example.ui.theme.ElectricViolet
-import com.example.ui.theme.EmeraldSuccess
 import com.example.ui.theme.GlassCard
-import com.example.ui.theme.GlassFill
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.RoseError
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.GestoTheme
 import com.example.ui.theme.glassSurface
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -69,6 +61,7 @@ fun TransferHistoryScreen(
     onDeleteRecord: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val palette = GestoTheme.colors
     var selectedFilter by remember { mutableStateOf("ALL") }
     var showClearDialog by remember { mutableStateOf(false) }
 
@@ -105,16 +98,16 @@ fun TransferHistoryScreen(
                             onClick = { selectedFilter = key },
                             label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = NeonCyan,
-                                selectedLabelColor = DarkBackground,
-                                containerColor = GlassFill,
-                                labelColor = TextSecondary
+                                selectedContainerColor = palette.accentPrimary,
+                                selectedLabelColor = palette.onAccentPrimary,
+                                containerColor = palette.glassFill,
+                                labelColor = palette.textSecondary
                             ),
                             border = FilterChipDefaults.filterChipBorder(
                                 enabled = true,
                                 selected = isSelected,
-                                borderColor = Color.White.copy(alpha = 0.2f),
-                                selectedBorderColor = NeonCyan
+                                borderColor = palette.glassBorder,
+                                selectedBorderColor = palette.accentPrimary
                             )
                         )
                     }
@@ -128,7 +121,7 @@ fun TransferHistoryScreen(
                         Icon(
                             imageVector = Icons.Default.DeleteOutline,
                             contentDescription = "Clear History",
-                            tint = RoseError
+                            tint = palette.error
                         )
                     }
                 }
@@ -149,13 +142,17 @@ fun TransferHistoryScreen(
                         Box(
                             modifier = Modifier
                                 .size(56.dp)
-                                .glassSurface(cornerRadius = 28.dp, fillColor = Color(0x66060B18), borderAccent = NeonCyan.copy(alpha = 0.35f)),
+                                .glassSurface(
+                                    cornerRadius = 28.dp,
+                                    fillColor = palette.glassFillInset,
+                                    borderAccent = palette.accentPrimary.copy(alpha = 0.35f)
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.History,
                                 contentDescription = null,
-                                tint = TextSecondary,
+                                tint = palette.textSecondary,
                                 modifier = Modifier.size(28.dp)
                             )
                         }
@@ -163,13 +160,13 @@ fun TransferHistoryScreen(
                         Text(
                             text = "No Transfer Logs",
                             fontWeight = FontWeight.Bold,
-                            color = TextPrimary
+                            color = palette.textPrimary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "Completed, failed, and cancelled P2P transfers are stored locally in Room SQLite with SHA-256 status.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary,
+                            color = palette.textSecondary,
                             textAlign = TextAlign.Center
                         )
                     }
@@ -177,12 +174,13 @@ fun TransferHistoryScreen(
             }
         } else {
             items(filteredTransfers, key = { it.id }) { record ->
+                val isSuccess = record.status == TransferStatus.SUCCESS
                 GlassCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("history_record_${record.id}"),
                     cornerRadius = 16.dp,
-                    borderAccent = if (record.status == TransferStatus.SUCCESS) EmeraldSuccess.copy(alpha = 0.4f) else RoseError.copy(alpha = 0.4f)
+                    borderAccent = (if (isSuccess) palette.success else palette.error).copy(alpha = 0.4f)
                 ) {
                     Column(
                         modifier = Modifier
@@ -204,15 +202,15 @@ fun TransferHistoryScreen(
                                         .size(36.dp)
                                         .glassSurface(
                                             cornerRadius = 18.dp,
-                                            fillColor = Color(0x66060B18),
-                                            borderAccent = if (record.direction == TransferDirection.SEND) NeonCyan else ElectricViolet
+                                            fillColor = palette.glassFillInset,
+                                            borderAccent = if (record.direction == TransferDirection.SEND) palette.accentPrimary else palette.accentSecondary
                                         ),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = if (record.direction == TransferDirection.SEND) Icons.Default.CallMade else Icons.Default.CallReceived,
                                         contentDescription = null,
-                                        tint = if (record.direction == TransferDirection.SEND) NeonCyan else ElectricViolet,
+                                        tint = if (record.direction == TransferDirection.SEND) palette.accentPrimary else palette.accentSecondary,
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
@@ -222,13 +220,13 @@ fun TransferHistoryScreen(
                                         text = record.fileName,
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
-                                        color = TextPrimary,
+                                        color = palette.textPrimary,
                                         maxLines = 1
                                     )
                                     Text(
                                         text = "${record.fileSizeFormatted} · ${if (record.direction == TransferDirection.SEND) "To: " + record.receiverName else "From: " + record.senderName}",
                                         fontSize = 11.sp,
-                                        color = TextSecondary
+                                        color = palette.textSecondary
                                     )
                                 }
                             }
@@ -240,7 +238,7 @@ fun TransferHistoryScreen(
                                 Icon(
                                     imageVector = Icons.Default.DeleteOutline,
                                     contentDescription = "Delete",
-                                    tint = Color(0xFF64748B),
+                                    tint = palette.textMuted,
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -251,7 +249,11 @@ fun TransferHistoryScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .glassSurface(cornerRadius = 8.dp, fillColor = Color(0x66060B18), borderAccent = Color.White.copy(alpha = 0.12f))
+                                .glassSurface(
+                                    cornerRadius = 8.dp,
+                                    fillColor = palette.glassFillInset,
+                                    borderAccent = palette.glassBorder
+                                )
                                 .padding(horizontal = 10.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -262,21 +264,21 @@ fun TransferHistoryScreen(
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Icon(
-                                    imageVector = if (record.status == TransferStatus.SUCCESS) Icons.Default.CheckCircle else Icons.Default.Error,
+                                    imageVector = if (isSuccess) Icons.Default.CheckCircle else Icons.Default.Error,
                                     contentDescription = null,
-                                    tint = if (record.status == TransferStatus.SUCCESS) EmeraldSuccess else RoseError,
+                                    tint = if (isSuccess) palette.success else palette.error,
                                     modifier = Modifier.size(12.dp)
                                 )
                                 Text(
                                     text = record.status.name,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (record.status == TransferStatus.SUCCESS) EmeraldSuccess else RoseError
+                                    color = if (isSuccess) palette.success else palette.error
                                 )
                                 Text(
                                     text = "· ${record.sha256Verification}",
                                     fontSize = 10.sp,
-                                    color = TextSecondary,
+                                    color = palette.textSecondary,
                                     maxLines = 1
                                 )
                             }
@@ -284,7 +286,7 @@ fun TransferHistoryScreen(
                             Text(
                                 text = dateFormatter.format(Date(record.timestamp)),
                                 fontSize = 10.sp,
-                                color = TextSecondary
+                                color = palette.textSecondary
                             )
                         }
                     }
@@ -296,25 +298,25 @@ fun TransferHistoryScreen(
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
-            title = { Text("Clear All Transfer History?", color = TextPrimary) },
-            text = { Text("This will permanently remove all transfer records from local SQLite storage.", color = TextSecondary) },
+            containerColor = palette.dialogSurface,
+            title = { Text("Clear All Transfer History?", color = palette.textPrimary) },
+            text = { Text("This will permanently remove all transfer records from local SQLite storage.", color = palette.textSecondary) },
             confirmButton = {
                 Button(
                     onClick = {
                         onClearHistory()
                         showClearDialog = false
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = RoseError)
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.error, contentColor = Color.White)
                 ) {
                     Text("Clear All")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showClearDialog = false }) {
-                    Text("Cancel", color = TextSecondary)
+                    Text("Cancel", color = palette.textSecondary)
                 }
-            },
-            containerColor = DarkSurface
+            }
         )
     }
 }

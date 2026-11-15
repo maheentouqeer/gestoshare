@@ -1,9 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Error
@@ -37,31 +36,23 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.R
+import com.example.BuildConfig
 import com.example.model.ContentItem
 import com.example.model.DeviceItem
 import com.example.model.TransferRecord
 import com.example.model.TransferStatus
 import com.example.ui.ScreenRoute
-import com.example.ui.theme.DarkBackground
-import com.example.ui.theme.ElectricViolet
-import com.example.ui.theme.EmeraldSuccess
+import com.example.ui.components.GestoShareBrandMark
+import com.example.ui.components.GlassStatusBadge
 import com.example.ui.theme.GlassCard
-import com.example.ui.theme.GlassFill
-import com.example.ui.theme.GlassFillElevated
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.RoseError
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.GestoTheme
 import com.example.ui.theme.glassSurface
 
 @Composable
@@ -69,12 +60,16 @@ fun HomeScreen(
     deviceName: String,
     stagedItems: List<ContentItem>,
     discoveredDevices: List<DeviceItem>,
+    connectedDevices: List<DeviceItem> = emptyList(),
+    errorCount: Int = 0,
     isAdvertising: Boolean,
     recentTransfers: List<TransferRecord>,
     onNavigate: (ScreenRoute) -> Unit,
     onToggleAdvertising: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val palette = GestoTheme.colors
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -90,8 +85,8 @@ fun HomeScreen(
                     .fillMaxWidth()
                     .testTag("hero_brand_card"),
                 cornerRadius = 24.dp,
-                fillColor = GlassFillElevated,
-                borderAccent = NeonCyan.copy(alpha = 0.55f)
+                fillColor = palette.glassFillElevated,
+                borderAccent = palette.accentPrimary.copy(alpha = 0.55f)
             ) {
                 Box(
                     modifier = Modifier
@@ -99,8 +94,8 @@ fun HomeScreen(
                         .background(
                             Brush.linearGradient(
                                 listOf(
-                                    NeonCyan.copy(alpha = 0.12f),
-                                    ElectricViolet.copy(alpha = 0.10f),
+                                    palette.accentPrimary.copy(alpha = 0.12f),
+                                    palette.accentSecondary.copy(alpha = 0.10f),
                                     Color.Transparent
                                 )
                             )
@@ -112,54 +107,38 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(54.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .border(1.5.dp, NeonCyan.copy(alpha = 0.8f), RoundedCornerShape(14.dp))
-                            ) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.airshare_icon_1794479065389),
-                                    contentDescription = "GestoShare Logo",
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
+                            GestoShareBrandMark(
+                                size = 54.dp,
+                                cornerRadius = 15.dp
+                            )
 
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = "GestoShare",
                                     style = MaterialTheme.typography.headlineSmall,
                                     fontWeight = FontWeight.ExtraBold,
-                                    color = TextPrimary
+                                    color = palette.textPrimary
                                 )
                                 Text(
                                     text = "Gesture-Powered P2P Transfer",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = NeonCyan,
+                                    color = palette.accentPrimary,
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
 
-                            Box(
-                                modifier = Modifier
-                                    .glassSurface(cornerRadius = 12.dp, fillColor = Color(0x66060B18), borderAccent = Color.White.copy(alpha = 0.25f))
-                                    .padding(horizontal = 9.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text = "v1.0",
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = TextSecondary
-                                )
-                            }
+                            GlassStatusBadge(
+                                label = "v${BuildConfig.VERSION_NAME}",
+                                color = palette.accentSecondary
+                            )
                         }
 
                         Spacer(modifier = Modifier.height(14.dp))
 
                         Text(
-                            text = "Share photos, videos, PDFs, notes, and links directly between nearby Android devices with SHA-256 verification and MediaPipe hand tracking.",
+                            text = "Share photos, videos, PDFs, notes, and links directly across nearby Android devices with MediaPipe gesture control and SHA-256 verification.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = TextSecondary,
+                            color = palette.textSecondary,
                             lineHeight = 20.sp
                         )
 
@@ -170,8 +149,8 @@ fun HomeScreen(
                                 .fillMaxWidth()
                                 .glassSurface(
                                     cornerRadius = 12.dp,
-                                    fillColor = Color(0x66060913),
-                                    borderAccent = EmeraldSuccess.copy(alpha = 0.4f)
+                                    fillColor = palette.glassFillInset,
+                                    borderAccent = palette.success.copy(alpha = 0.45f)
                                 )
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -185,18 +164,18 @@ fun HomeScreen(
                                 Box(
                                     modifier = Modifier
                                         .size(8.dp)
-                                        .background(EmeraldSuccess, CircleShape)
+                                        .background(palette.success, CircleShape)
                                 )
                                 Text(
                                     text = "Device:",
                                     fontSize = 12.sp,
-                                    color = TextSecondary
+                                    color = palette.textSecondary
                                 )
                                 Text(
                                     text = deviceName,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = TextPrimary,
+                                    color = palette.textPrimary,
                                     maxLines = 1
                                 )
                             }
@@ -205,7 +184,7 @@ fun HomeScreen(
                                 text = "Offline Ready",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = NeonCyan
+                                color = palette.accentPrimary
                             )
                         }
                     }
@@ -227,8 +206,8 @@ fun HomeScreen(
                         .testTag("send_content_button"),
                     shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = NeonCyan,
-                        contentColor = DarkBackground
+                        containerColor = palette.accentPrimary,
+                        contentColor = palette.onAccentPrimary
                     )
                 ) {
                     Row(
@@ -263,12 +242,12 @@ fun HomeScreen(
                         .testTag("receive_content_button"),
                     shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isAdvertising) ElectricViolet.copy(alpha = 0.85f) else GlassFillElevated,
-                        contentColor = TextPrimary
+                        containerColor = if (isAdvertising) palette.accentSecondary else palette.glassFillElevated,
+                        contentColor = if (isAdvertising) Color.White else palette.textPrimary
                     ),
                     border = BorderStroke(
                         1.dp,
-                        if (isAdvertising) ElectricViolet else Color.White.copy(alpha = 0.22f)
+                        if (isAdvertising) palette.accentSecondary else palette.glassBorder
                     )
                 ) {
                     Row(
@@ -278,7 +257,7 @@ fun HomeScreen(
                         Icon(
                             imageVector = Icons.Default.Radio,
                             contentDescription = null,
-                            tint = if (isAdvertising) Color.White else NeonCyan,
+                            tint = if (isAdvertising) Color.White else palette.accentPrimary,
                             modifier = Modifier.size(22.dp)
                         )
                         Column {
@@ -290,9 +269,62 @@ fun HomeScreen(
                             Text(
                                 text = if (isAdvertising) "Beacon Active" else "Open Beacon",
                                 fontSize = 11.sp,
-                                color = if (isAdvertising) Color(0xFFE0E0FF) else TextSecondary
+                                color = if (isAdvertising) Color.White.copy(alpha = 0.85f) else palette.textSecondary
                             )
                         }
+                    }
+                }
+            }
+        }
+
+        // Diagnostics shortcut when errors have occurred
+        if (errorCount > 0) {
+            item {
+                GlassCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigate(ScreenRoute.DIAGNOSTICS) }
+                        .testTag("home_diagnostics_alert_card"),
+                    cornerRadius = 16.dp,
+                    fillColor = palette.error.copy(alpha = 0.12f),
+                    borderAccent = palette.error.copy(alpha = 0.65f)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.BugReport,
+                                contentDescription = "Diagnostics Alert",
+                                tint = palette.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "$errorCount Diagnostic Report(s) Recorded",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.textPrimary
+                                )
+                                Text(
+                                    text = "Tap to inspect stack traces or export report",
+                                    fontSize = 11.sp,
+                                    color = palette.error
+                                )
+                            }
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = "Open Diagnostics",
+                            tint = palette.error
+                        )
                     }
                 }
             }
@@ -307,8 +339,8 @@ fun HomeScreen(
                         .clickable { onNavigate(ScreenRoute.CONTENT_SELECTION) }
                         .testTag("staged_content_alert"),
                     cornerRadius = 16.dp,
-                    fillColor = NeonCyan.copy(alpha = 0.14f),
-                    borderAccent = NeonCyan.copy(alpha = 0.7f)
+                    fillColor = palette.accentPrimary.copy(alpha = 0.14f),
+                    borderAccent = palette.accentPrimary.copy(alpha = 0.7f)
                 ) {
                     Row(
                         modifier = Modifier
@@ -324,13 +356,13 @@ fun HomeScreen(
                             Box(
                                 modifier = Modifier
                                     .size(36.dp)
-                                    .background(NeonCyan, CircleShape),
+                                    .background(palette.accentPrimary, CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.UploadFile,
                                     contentDescription = null,
-                                    tint = DarkBackground,
+                                    tint = palette.onAccentPrimary,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -338,13 +370,13 @@ fun HomeScreen(
                                 Text(
                                     text = "${stagedItems.size} Item(s) Staged for Transfer",
                                     fontWeight = FontWeight.Bold,
-                                    color = TextPrimary,
+                                    color = palette.textPrimary,
                                     fontSize = 14.sp
                                 )
                                 Text(
                                     text = "Tap to review SHA-256 & send to peer",
                                     fontSize = 12.sp,
-                                    color = NeonCyan
+                                    color = palette.accentPrimary
                                 )
                             }
                         }
@@ -352,7 +384,7 @@ fun HomeScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                             contentDescription = "Review",
-                            tint = NeonCyan
+                            tint = palette.accentPrimary
                         )
                     }
                 }
@@ -367,8 +399,8 @@ fun HomeScreen(
                     .clickable { onNavigate(ScreenRoute.NEARBY_DEVICES) }
                     .testTag("nearby_status_card"),
                 cornerRadius = 20.dp,
-                fillColor = GlassFill,
-                borderAccent = NeonCyan.copy(alpha = 0.35f)
+                fillColor = palette.glassFill,
+                borderAccent = if (connectedDevices.isNotEmpty()) palette.success.copy(alpha = 0.5f) else palette.accentPrimary.copy(alpha = 0.35f)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -383,27 +415,31 @@ fun HomeScreen(
                             Box(
                                 modifier = Modifier
                                     .size(38.dp)
-                                    .glassSurface(cornerRadius = 19.dp, fillColor = Color(0x66060B18), borderAccent = NeonCyan.copy(alpha = 0.55f)),
+                                    .glassSurface(
+                                        cornerRadius = 19.dp,
+                                        fillColor = palette.glassFillInset,
+                                        borderAccent = palette.accentPrimary.copy(alpha = 0.55f)
+                                    ),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Devices,
                                     contentDescription = null,
-                                    tint = NeonCyan,
+                                    tint = if (connectedDevices.isNotEmpty()) palette.success else palette.accentPrimary,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
                             Column {
                                 Text(
-                                    text = "Nearby Peers Status",
+                                    text = "Nearby Cluster Status",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
+                                    color = palette.textPrimary
                                 )
                                 Text(
-                                    text = "${discoveredDevices.size} peer device(s) discovered nearby",
+                                    text = "${connectedDevices.size} connected · ${discoveredDevices.size} discovered",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = TextSecondary
+                                    color = if (connectedDevices.isNotEmpty()) palette.success else palette.textSecondary
                                 )
                             }
                         }
@@ -411,24 +447,25 @@ fun HomeScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                             contentDescription = "View Devices",
-                            tint = TextSecondary
+                            tint = palette.textSecondary
                         )
                     }
 
-                    if (discoveredDevices.isNotEmpty()) {
+                    val previewList = (connectedDevices + discoveredDevices).distinctBy { it.endpointId }
+                    if (previewList.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(14.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            discoveredDevices.take(3).forEach { dev ->
+                            previewList.take(3).forEach { dev ->
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
                                         .glassSurface(
                                             cornerRadius = 12.dp,
-                                            fillColor = Color(0x66060B18),
-                                            borderAccent = NeonCyan.copy(alpha = 0.3f)
+                                            fillColor = palette.glassFillInset,
+                                            borderAccent = if (dev.isConnected) palette.success else palette.accentPrimary.copy(alpha = 0.3f)
                                         )
                                         .padding(8.dp)
                                 ) {
@@ -437,14 +474,14 @@ fun HomeScreen(
                                             text = dev.name,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.SemiBold,
-                                            color = TextPrimary,
+                                            color = palette.textPrimary,
                                             maxLines = 1
                                         )
                                         Text(
-                                            text = "ID: ${dev.endpointId}",
+                                            text = if (dev.isConnected) "CONNECTED" else "ID: ${dev.endpointId}",
                                             fontSize = 10.sp,
                                             fontFamily = FontFamily.Monospace,
-                                            color = NeonCyan
+                                            color = if (dev.isConnected) palette.success else palette.accentPrimary
                                         )
                                     }
                                 }
@@ -463,8 +500,8 @@ fun HomeScreen(
                     .clickable { onNavigate(ScreenRoute.GESTURE_CONTROL) }
                     .testTag("gesture_sandbox_card"),
                 cornerRadius = 20.dp,
-                fillColor = GlassFill,
-                borderAccent = ElectricViolet.copy(alpha = 0.45f)
+                fillColor = palette.glassFill,
+                borderAccent = palette.accentSecondary.copy(alpha = 0.45f)
             ) {
                 Row(
                     modifier = Modifier
@@ -482,8 +519,8 @@ fun HomeScreen(
                                 .size(44.dp)
                                 .glassSurface(
                                     cornerRadius = 22.dp,
-                                    fillColor = Color(0x66060B18),
-                                    borderAccent = ElectricViolet,
+                                    fillColor = palette.glassFillInset,
+                                    borderAccent = palette.accentSecondary,
                                     borderWidth = 1.5.dp
                                 ),
                             contentAlignment = Alignment.Center
@@ -491,7 +528,7 @@ fun HomeScreen(
                             Icon(
                                 imageVector = Icons.Default.PanTool,
                                 contentDescription = null,
-                                tint = ElectricViolet,
+                                tint = palette.accentSecondary,
                                 modifier = Modifier.size(22.dp)
                             )
                         }
@@ -500,13 +537,13 @@ fun HomeScreen(
                                 text = "MediaPipe Gesture Radar",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = TextPrimary
+                                color = palette.textPrimary
                             )
                             Text(
                                 text = "LIKE · FIST · POINT · THREE_GUN · STOP",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontSize = 11.sp,
-                                color = ElectricViolet
+                                color = palette.accentSecondary
                             )
                         }
                     }
@@ -514,7 +551,7 @@ fun HomeScreen(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                         contentDescription = "Open Gesture Screen",
-                        tint = ElectricViolet
+                        tint = palette.accentSecondary
                     )
                 }
             }
@@ -531,13 +568,13 @@ fun HomeScreen(
                     text = "Recent Transfers",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    color = palette.textPrimary
                 )
 
                 Text(
                     text = "View All (${recentTransfers.size})",
                     fontSize = 12.sp,
-                    color = NeonCyan,
+                    color = palette.accentPrimary,
                     modifier = Modifier
                         .clickable { onNavigate(ScreenRoute.HISTORY) }
                         .padding(4.dp)
@@ -558,25 +595,26 @@ fun HomeScreen(
                         Text(
                             text = "No transfers yet",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = TextSecondary
+                            color = palette.textSecondary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "Import files and share between Redmi / Infinix devices",
                             fontSize = 12.sp,
-                            color = TextSecondary.copy(alpha = 0.7f)
+                            color = palette.textMuted
                         )
                     }
                 }
             }
         } else {
             items(recentTransfers.take(3)) { record ->
+                val isOk = record.status == TransferStatus.SUCCESS
                 GlassCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onNavigate(ScreenRoute.HISTORY) },
                     cornerRadius = 14.dp,
-                    borderAccent = if (record.status == TransferStatus.SUCCESS) EmeraldSuccess.copy(alpha = 0.4f) else RoseError.copy(alpha = 0.4f)
+                    borderAccent = (if (isOk) palette.success else palette.error).copy(alpha = 0.45f)
                 ) {
                     Row(
                         modifier = Modifier
@@ -591,9 +629,9 @@ fun HomeScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(
-                                imageVector = if (record.status == TransferStatus.SUCCESS) Icons.Default.CheckCircle else Icons.Default.Error,
+                                imageVector = if (isOk) Icons.Default.CheckCircle else Icons.Default.Error,
                                 contentDescription = null,
-                                tint = if (record.status == TransferStatus.SUCCESS) EmeraldSuccess else RoseError,
+                                tint = if (isOk) palette.success else palette.error,
                                 modifier = Modifier.size(20.dp)
                             )
                             Column {
@@ -601,13 +639,13 @@ fun HomeScreen(
                                     text = record.fileName,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = TextPrimary,
+                                    color = palette.textPrimary,
                                     maxLines = 1
                                 )
                                 Text(
                                     text = "${record.fileSizeFormatted} · ${record.receiverName}",
                                     fontSize = 11.sp,
-                                    color = TextSecondary
+                                    color = palette.textSecondary
                                 )
                             }
                         }
@@ -616,7 +654,7 @@ fun HomeScreen(
                             text = record.status.name,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (record.status == TransferStatus.SUCCESS) EmeraldSuccess else RoseError
+                            color = if (isOk) palette.success else palette.error
                         )
                     }
                 }

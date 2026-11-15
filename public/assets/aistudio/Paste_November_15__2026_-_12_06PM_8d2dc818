@@ -1,0 +1,1252 @@
+# MASTER ENGINEERING & UI UPGRADE PROMPT — GESTOSHARE
+## Glassmorphism Redesign + Multi-Device Gesture Selection + Advanced Diagnostics + Reliable File Transfer
+
+You are acting as a senior Android engineer, Kotlin/Jetpack Compose architect, computer-vision engineer, UX/UI designer, and QA engineer.
+
+I have an existing Android application named **GestoShare**. I want you to upgrade the existing project into a polished, reliable, multi-device, gesture-controlled offline file-sharing application.
+
+This is an existing working project. Do not rebuild it from scratch, replace its architecture unnecessarily, remove existing features, or introduce fake implementations.
+
+Your first responsibility is to inspect the complete existing codebase, understand the current implementation, identify weaknesses, and then implement the upgrade carefully.
+
+---
+
+# PART 1 — PROJECT CONTEXT AND EXISTING FUNCTIONALITY
+
+The application currently uses:
+
+- Kotlin
+- Jetpack Compose
+- CameraX
+- MediaPipe HandLandmarker
+- A custom-trained HaGRIDv2 gesture model exported to ONNX
+- ONNX Runtime Android
+- Google Nearby Connections API
+- Peer-to-peer offline communication
+- Six-digit connection authentication
+- Android Sharesheet / Storage Access Framework
+- File, text, image and URL transfer
+- SHA-256 file integrity verification
+- Room database for transfer history
+- Gesture temporal stabilization and state machine
+
+Existing application ID:
+
+com.aistudio.airshare.zgkvm
+
+Current application name in the code:
+
+GestoShare
+
+Existing gesture mapping:
+
+| Gesture | Action |
+|---|---|
+| fist | Grab currently staged content |
+| like | Activate gesture-transfer mode |
+| point | Select/cycle through nearby devices |
+| stop | Cancel current operation |
+| three_gun | Fire/send to selected recipient |
+| OTHER | Neutral state |
+
+Existing workflow:
+
+1. User activates gesture mode using thumbs-up.
+2. User grabs the currently staged content.
+3. User points to select a recipient.
+4. User fires the three-gun gesture.
+5. Sender transmits the selected content.
+6. Receiver sees an incoming transfer offer.
+7. Receiver manually accepts or declines.
+8. File is received, copied, verified and saved.
+
+Preserve this workflow and improve its implementation.
+
+The receiver must always retain explicit Accept/Decline consent. Do not automatically save or accept files without user approval.
+
+---
+
+# PART 2 — FIRST: COMPLETE CODEBASE AUDIT
+
+Before changing code, inspect:
+
+1. Project structure and modules.
+2. MainActivity and navigation.
+3. All Jetpack Compose screens.
+4. CameraX implementation.
+5. HandLandmarker and ONNX inference pipeline.
+6. Gesture state machine.
+7. Nearby Connections manager.
+8. Endpoint discovery and connection lifecycle.
+9. Connection authentication.
+10. PayloadManifestTracker.
+11. Payload receive callbacks.
+12. Payload transfer update callbacks.
+13. File storage and export implementation.
+14. SHA-256 verification.
+15. Room entities, DAOs and repositories.
+16. Existing logging and error handling.
+17. AndroidManifest.xml.
+18. Gradle dependencies and build configuration.
+19. Existing automated tests.
+
+Identify actual source files and functions responsible for each operation.
+
+Create an implementation plan based on the existing code.
+
+Do not invent classes or claim that an implementation exists without inspecting it.
+
+Do not silently remove any working functionality.
+
+---
+
+# PART 3 — CRITICAL FILE TRANSFER BUG FIX
+
+The application has been physically tested on Redmi and Infinix Android phones.
+
+Successful tests:
+- Devices discover each other.
+- Connections establish successfully.
+- Six-digit authentication succeeds.
+- Text transfer works.
+- Gesture recognition correctly recognizes activate, grab, point and three_gun.
+- The receiver displays the incoming file offer.
+- The receiver can accept the transfer.
+- The image reaches 100% transport progress.
+
+However, after a 276.9 KB image reaches 100%, the application reports:
+
+EACCES (Permission denied)
+
+Example error:
+
+/storage/emulated/0/Download/.nearby/-7438276027103684580:
+open failed: EACCES (Permission denied)
+
+This indicates that transport completion and application-level file finalization are being confused.
+
+Investigate the actual implementation and correct it.
+
+## Required implementation
+
+For modern Android versions and scoped storage:
+
+1. Keep the incoming FILE Payload reference associated with its payload ID.
+2. Track BYTES metadata and FILE payload independently because they can arrive in different orders.
+3. Wait for PayloadTransferUpdate.Status.SUCCESS before processing the complete received file.
+4. Retrieve the received URI through:
+
+payload.asFile().asUri()
+
+5. Open the URI using:
+
+context.contentResolver.openInputStream(uri)
+
+6. Copy the contents into an app-controlled temporary file, preferably under an appropriate app-private cache or files directory.
+7. Calculate SHA-256 incrementally while copying.
+8. Track the exact number of bytes copied.
+9. Compare received bytes with expected manifest size.
+10. Verify SHA-256 against the sender's manifest.
+11. Sanitize filenames and prevent path traversal.
+12. Only after verification, export the file to Downloads/GestoShare using MediaStore on modern Android.
+13. If export fails, preserve the verified temporary copy and report the exact error.
+14. Delete the original Nearby temporary URI through ContentResolver only when it is safe to do so.
+15. Close streams, descriptors and payload resources correctly.
+16. Handle cancellation, timeout, partial transfer and application interruption.
+17. Preserve existing payload ID correlation and race-condition protections.
+
+Do NOT:
+
+- Use Payload.File.asJavaFile() as the modern Android file-access mechanism.
+- Construct File objects from the Nearby temporary path.
+- Use FileInputStream on a path inside /Download/.nearby.
+- Rename the Nearby temporary file directly.
+- Use chmod to bypass storage restrictions.
+- Request MANAGE_EXTERNAL_STORAGE as a workaround.
+- Disable scoped storage.
+- Claim a file was saved merely because the transport reached 100%.
+
+Follow the modern Google Nearby Connections URI-based file handling approach.
+
+## Separate transfer states
+
+Implement distinct states:
+
+DISCOVERING
+CONNECTING
+AUTHENTICATING
+CONNECTED
+CONTENT_STAGED
+RECIPIENT_SELECTED
+WAITING_FOR_FIRE
+SENDING
+RECEIVING
+AWAITING_USER_ACCEPTANCE
+TRANSPORT_COMPLETED
+FINALIZING
+COPYING_TO_PRIVATE_STORAGE
+VERIFYING_INTEGRITY
+EXPORTING_TO_DOWNLOADS
+SUCCESS
+FAILED
+CANCELLED
+
+Only mark the complete application transfer SUCCESS after all required file operations and integrity checks have passed.
+
+The UI must distinguish:
+
+- Transport progress: 100%
+- File copy: completed or failed
+- SHA-256: passed or failed
+- Export: completed or failed
+
+---
+
+# PART 4 — ADVANCED DIAGNOSTICS & ERROR CENTER
+
+Create a dedicated section:
+
+Settings → Diagnostics & Error Center
+
+Also add access to recent errors from the main transfer screen.
+
+This should be a genuine technical debugging system, not a static list of sample errors.
+
+## A. Structured error model
+
+Create a central structured error model.
+
+Each error event should contain:
+
+- Unique event ID
+- Human-readable error code
+- Error category
+- Severity
+- Timestamp
+- Operation
+- Current transfer stage
+- Human-readable title
+- Explanation
+- Likely cause
+- Recommended investigation
+- Original exception class
+- Exception message
+- Root cause
+- Stack trace
+- Device model
+- Android version
+- App version
+- Relevant permission state
+- Connection state
+- Endpoint identifier, safely redacted where necessary
+- Payload ID
+- File type
+- Expected size
+- Received size
+- Current progress
+- SHA-256 verification status
+- Whether the error is recoverable
+- Suggested recovery action
+
+Use a consistent internal taxonomy. Example categories:
+
+GS-GESTURE-001 — Gesture model initialization failed
+
+GS-GESTURE-002 — Gesture inference error
+
+GS-GESTURE-003 — Gesture not stable enough
+
+GS-NET-001 — Discovery failed
+
+GS-NET-002 — Connection request failed
+
+GS-NET-003 — Authentication mismatch
+
+GS-NET-004 — Peer disconnected
+
+GS-FILE-001 — Source file unavailable
+
+GS-FILE-002 — File payload failed
+
+GS-FILE-003 — Metadata correlation failed
+
+GS-FILE-004 — Received file could not be opened
+
+GS-FILE-005 — File copy failed
+
+GS-FILE-006 — Integrity verification failed
+
+GS-FILE-007 — Export to Downloads failed
+
+GS-FILE-008 — Insufficient storage
+
+GS-APP-001 — Permission missing
+
+GS-APP-002 — Unexpected application exception
+
+These are examples for the taxonomy. Implement meaningful mappings based on actual exceptions and operations. Never show a fabricated error code.
+
+## B. Error Center interface
+
+Create an elegant glassmorphism Diagnostics screen.
+
+Show:
+
+- Total events
+- Errors
+- Warnings
+- Successful operations
+- Most recent error
+- Device information
+- Application version
+- Current permission status
+- Connection health
+
+Provide filters:
+
+- All
+- Errors
+- Warnings
+- Transfers
+- Gestures
+- Connections
+- Storage
+- Permissions
+
+Each error should appear as a selectable card.
+
+When opened, display:
+
+1. What happened?
+2. At which stage did it happen?
+3. Why might it have happened?
+4. Exact technical exception.
+5. Relevant source operation.
+6. Suggested code investigation.
+7. Suggested fix.
+8. Whether retry is safe.
+
+Provide expandable sections for technical details and stack traces.
+
+## C. Copy error report button
+
+Every error detail screen must have:
+
+COPY ERROR REPORT
+
+The button must copy a complete, formatted technical report to the clipboard.
+
+Example:
+
+GESTOSHARE ERROR REPORT
+
+Error ID: GS-FILE-004
+Timestamp: [actual timestamp]
+Severity: ERROR
+
+Operation: Incoming image transfer
+Stage: Finalizing received file
+
+Transport status: SUCCESS
+Transport progress: 100%
+File copy status: FAILED
+SHA-256 status: NOT COMPLETED
+
+Exception:
+[actual exception class]
+
+Message:
+[actual exception message]
+
+Root cause:
+[actual root cause if known]
+
+Device:
+[actual device model]
+
+Android:
+[actual Android version]
+
+App version:
+[actual version]
+
+Payload ID:
+[actual payload ID]
+
+Expected bytes:
+[actual value]
+
+Received bytes:
+[actual value]
+
+Stack trace:
+[actual stack trace]
+
+Suggested investigation:
+[generated from actual error category and exception]
+
+Do not include private file contents, passwords, authentication secrets, or unnecessary personal information.
+
+## D. Export diagnostic report
+
+Add:
+
+EXPORT DIAGNOSTICS
+
+Allow exporting:
+
+- TXT report
+- JSON report
+
+The report should contain the selected event or a selected time range.
+
+Make the output shareable through Android Sharesheet.
+
+Add a copy-all-errors option.
+
+## E. Persistent logs
+
+Use structured logging with a bounded local log history.
+
+Record important events:
+
+- Gesture detected
+- Gesture confidence
+- Gesture stabilization result
+- Content staged
+- Peer discovered
+- Connection requested
+- Authentication accepted
+- Connection established
+- Recipient selected
+- Send initiated
+- Payload progress
+- Payload completed
+- File copied
+- SHA-256 verified
+- File exported
+- Transfer completed
+- Transfer failed
+
+Use a sensible retention limit and prevent unbounded database or file growth.
+
+Never log raw file content, passwords, authentication secrets or unnecessary sensitive information.
+
+Add:
+
+- Clear logs
+- Clear error history
+- Export logs
+- Filter logs
+
+Ask for confirmation before clearing records.
+
+Keep transfer history separate from diagnostic logs.
+
+## F. Automatic error interpretation
+
+Create a diagnostic mapping layer.
+
+For known errors, show useful explanations rather than generic messages.
+
+Examples:
+
+EACCES:
+Likely storage access or URI handling issue.
+
+FileNotFoundException:
+Source file or received payload is unavailable.
+
+SecurityException:
+Missing permission or unauthorized URI access.
+
+Connection rejected:
+Remote endpoint rejected the connection request.
+
+Endpoint lost:
+Remote device disconnected or became unavailable.
+
+Checksum mismatch:
+Received content does not match the sender's expected SHA-256.
+
+Insufficient storage:
+Not enough available storage for the incoming file.
+
+Unknown exception:
+Show the original exception and stack trace. Do not guess the cause.
+
+---
+
+# PART 5 — MULTI-DEVICE DISCOVERY AND RECIPIENT SELECTION
+
+This is one of the most important upgrades.
+
+Currently I test between two phones: Redmi and Infinix.
+
+I want the application to support multiple nearby GestoShare devices.
+
+For example:
+
+- Redmi Note
+- Infinix
+- Samsung Galaxy
+- Another Android phone
+
+If five devices are discovered, I must be able to select exactly which device receives the content.
+
+## A. Discovery screen
+
+Create a live nearby-device list.
+
+Each device should show:
+
+- Friendly device name
+- Device model if safely available
+- Connection status
+- Authentication status
+- Signal/availability indicator only if backed by actual data
+- Last seen time
+- Selection state
+
+Possible statuses:
+
+DISCOVERED
+CONNECTING
+AUTHENTICATING
+CONNECTED
+DISCONNECTED
+UNAVAILABLE
+
+Do not pretend that an endpoint is connected simply because it was discovered.
+
+Provide:
+
+- Scan again
+- Stop scanning
+- Connect
+- Disconnect
+- Forget/disconnect device
+
+Prevent duplicate endpoint entries.
+
+Handle endpointLost correctly and remove stale peers.
+
+## B. Multi-device connection topology
+
+Inspect the current Nearby Connections Strategy.
+
+Choose the topology appropriate for the intended use case:
+
+- One sender sharing to multiple receivers.
+- Multiple devices discovering and connecting to each other.
+- One-to-many or many-to-many operation.
+
+Evaluate P2P_STAR and P2P_CLUSTER based on the current architecture.
+
+Do not change the strategy without checking compatibility with existing connections, authentication, transfer callbacks and device lifecycle.
+
+Preserve the existing six-digit authentication flow.
+
+Never assume a discovered device is an authenticated device.
+
+## C. Gesture camera recipient overlay
+
+This is the central UX requirement.
+
+When gesture mode is activated, display a compact floating glass panel above the camera preview.
+
+Example:
+
+NEARBY RECIPIENTS
+
+[1] Redmi Note 12       CONNECTED
+[2] Infinix             CONNECTED
+[3] Samsung Galaxy      CONNECTED
+
+SELECTED:
+Redmi Note 12
+
+1 OF 3 DEVICES
+
+The recipient list must update when devices connect or disconnect.
+
+Highlight the selected recipient with a distinct visual treatment.
+
+Show a small device avatar/icon and connection status.
+
+Keep the user's hand and camera feed visible.
+
+Do not cover the main gesture recognition area.
+
+## D. Point gesture selection
+
+The point gesture must cycle through the currently eligible connected devices.
+
+Example with three connected devices:
+
+First stable point:
+Select Redmi.
+
+Second stable point:
+Select Infinix.
+
+Third stable point:
+Select Samsung.
+
+Fourth stable point:
+Return to Redmi.
+
+Use temporal stabilization and a cooldown to prevent one held gesture from cycling through the entire list repeatedly.
+
+A fresh point gesture should trigger one selection step.
+
+Update the visual selection immediately.
+
+Show:
+
+SELECTED: INFINIX
+2 OF 3
+
+If only one eligible recipient exists, keep that recipient selected and show:
+
+ONLY ONE CONNECTED DEVICE
+
+The device list must also allow direct touch selection as a fallback.
+
+Important: The current model recognizes the hand pose "point". It does not calculate physical 3D direction toward another phone. Do not implement fake spatial pointing. Use deterministic list cycling unless a separate, real spatial-tracking system is developed.
+
+## E. Fire gesture
+
+When the user performs three_gun:
+
+1. Verify that content is staged.
+2. Verify that an eligible recipient is selected.
+3. Verify that the selected recipient is connected and authenticated.
+4. Verify that no conflicting transfer is already active.
+5. Freeze the recipient selection for the current transfer.
+6. Send only to the selected endpoint.
+7. Display the selected device name and transfer progress.
+
+If no recipient is selected, do not send.
+
+Show a useful message:
+
+"No connected recipient selected. Point to choose a device."
+
+Never broadcast to every device unintentionally.
+
+## F. Optional multi-recipient sharing
+
+Add a separate explicit multi-select mode.
+
+The user can manually select multiple connected devices.
+
+Example:
+
+[✓] Redmi
+[✓] Infinix
+[ ] Samsung
+
+Then fire to send to the selected recipients.
+
+Treat this as a separate action from single-recipient mode.
+
+Show independent progress, success and failure status for each receiver.
+
+Do not enable group sending by default.
+
+Preserve per-device transfer IDs, acknowledgments, integrity checks and receiver consent.
+
+---
+
+# PART 6 — COMPLETE GLASSMORPHISM UI REDESIGN
+
+Redesign the application using a consistent, premium glassmorphism design system.
+
+Visual inspiration:
+
+- Modern frosted-glass interfaces
+- Translucent floating cards
+- Soft backdrop blur
+- Layered glass panels
+- Subtle gradients
+- Thin semi-transparent borders
+- Soft shadows
+- Ambient lighting
+- Smooth transitions
+- Minimal futuristic technology aesthetic
+
+Do not merely change the background color. Redesign the visual hierarchy and components consistently.
+
+## A. Design direction
+
+App identity:
+
+GestoShare
+
+Visual personality:
+
+- Futuristic
+- Premium
+- Minimal
+- Elegant
+- Technology-focused
+- Clean
+- Professional
+
+Suggested palette:
+
+Background:
+Deep midnight navy / charcoal.
+
+Accent:
+Electric blue, cyan and subtle violet.
+
+Glass surfaces:
+Semi-transparent dark navy or light translucent surfaces depending on theme.
+
+Borders:
+Thin white or cyan translucent borders.
+
+Text:
+High-contrast white for dark mode and dark charcoal for light mode.
+
+Status colors:
+Green for success.
+Amber for warnings.
+Red for failures.
+Blue for active operations.
+
+Avoid excessive neon, distracting animations and overdecorated elements.
+
+## B. Glass components
+
+Create reusable Compose components:
+
+GlassCard
+GlassButton
+GlassIconButton
+GlassBottomNavigation
+GlassTopBar
+GlassDialog
+GlassBottomSheet
+GlassStatusBadge
+GlassDeviceCard
+GlassTransferCard
+GlassErrorCard
+GlassCameraOverlay
+GlassProgressIndicator
+
+All should share consistent:
+
+- Corner radius
+- Border treatment
+- Transparency
+- Elevation
+- Typography
+- Spacing
+- Animation behavior
+
+Use translucent backgrounds, subtle gradients and thin borders.
+
+Implement blur carefully.
+
+Important Android implementation detail:
+
+Jetpack Compose Modifier.blur() blurs the content drawn by that composable. It is not automatically a true backdrop blur of everything behind a glass card.
+
+Use a supported backdrop-blur approach only where it works reliably.
+
+For devices where backdrop blur is unsupported or expensive, provide a visual fallback using translucent surfaces, gradients, borders and shadows.
+
+Do not make the camera preview or gesture inference lag because of expensive blur effects.
+
+The app must remain responsive on lower-end devices.
+
+Use sufficient text contrast and test accessibility.
+
+## C. Main screens to redesign
+
+Redesign all existing screens consistently:
+
+1. Splash screen
+2. Onboarding
+3. Home screen
+4. Gesture camera screen
+5. Nearby devices screen
+6. Connection authentication screen
+7. Content staging screen
+8. Active transfer screen
+9. Incoming transfer screen
+10. Transfer history
+11. Settings
+12. Diagnostics and Error Center
+13. Device details
+14. About GestoShare
+
+## D. Main home screen
+
+The home screen should show:
+
+- GestoShare branding
+- Connection/discovery status
+- Number of connected devices
+- Start Gesture Sharing
+- Select Content
+- Nearby Devices
+- Recent Transfers
+- Diagnostics shortcut
+- Settings
+
+Use floating glass cards with clear hierarchy.
+
+## E. Gesture camera screen
+
+This is the main experience.
+
+Show:
+
+- Camera preview
+- Live hand landmark/gesture visualization where currently supported
+- Recognized gesture name
+- Gesture confidence score
+- Gesture state
+- Current staged content
+- Connected device count
+- Recipient selection overlay
+- Selected recipient
+- Transfer status
+- Cancel control
+
+Example:
+
+GESTURE MODE ACTIVE
+
+Recognized:
+POINT
+
+STAGED CONTENT:
+IMG_2026.jpg
+
+RECIPIENT:
+Redmi Note 12
+
+2 OF 3 CONNECTED DEVICES
+
+NEXT ACTION:
+FIRE TO SEND
+
+Make the interface understandable even to a first-time user.
+
+## F. Transfer screen
+
+Show separate progress stages:
+
+Preparing
+Sending
+Receiving
+Finalizing
+Verifying
+Saving
+
+Display:
+
+- File name
+- File type
+- File size
+- Sender
+- Recipient
+- Actual transfer progress
+- Transfer speed if accurately measured
+- SHA-256 verification result
+- Final save location
+- Retry if safe
+- Cancel if supported
+
+Do not show 100% SUCCESS before final verification.
+
+## G. Incoming transfer screen
+
+Keep explicit consent.
+
+Display:
+
+- Sender device
+- Filename
+- Type
+- Size
+- Transfer information
+- Accept
+- Decline
+
+Use clear, accessible controls.
+
+---
+
+# PART 7 — APPLICATION BRANDING AND LOGO
+
+The application currently displays the old branding:
+
+Air Share AI
+
+Change all visible branding to:
+
+GestoShare
+
+The application name must be consistent everywhere.
+
+Update:
+
+- Splash screen
+- Launcher icon
+- Android application label
+- Home screen title
+- About screen
+- Navigation labels where applicable
+- Notifications
+- Relevant strings
+- Any old visible Air Share AI text
+- App branding assets
+
+Do not change the application ID.
+
+## New logo direction
+
+Create a professional GestoShare icon.
+
+Concept:
+
+A stylized hand gesture combined with wireless sharing waves and a subtle connection/network symbol.
+
+Visual treatment:
+
+- Modern
+- Minimal
+- Recognizable at small sizes
+- Premium technology branding
+- Electric cyan and blue with subtle violet accents
+- Dark background or a transparent-safe foreground design
+- Clean geometric shapes
+- Strong silhouette
+
+The logo should communicate:
+
+GESTURES + CONNECTIVITY + FILE SHARING
+
+Do not use the old Air Share AI wordmark.
+
+Create/update:
+
+- ic_launcher foreground
+- ic_launcher background
+- Adaptive launcher icon
+- Splash branding
+- In-app logo/vector asset
+
+Use Android's adaptive icon requirements and preserve appropriate safe zones.
+
+Do not simply rename the app text while leaving the old launcher icon.
+
+---
+
+# PART 8 — ADDITIONAL USEFUL FEATURES
+
+Evaluate and implement these features where compatible with the current architecture.
+
+Prioritize reliability over adding unnecessary complexity.
+
+## 1. Smart content preview
+
+Before sending, show:
+
+- Image thumbnail
+- Video thumbnail where supported
+- File name and extension
+- File size
+- Text preview
+- URL preview
+
+## 2. Recent devices
+
+Remember previously connected devices locally.
+
+Display trusted/recent devices separately from newly discovered devices.
+
+Do not automatically trust a device solely because it was previously seen.
+
+## 3. Transfer history
+
+Display:
+
+- Sent files
+- Received files
+- Transfer date
+- Sender
+- Recipient
+- File size
+- Status
+- Verification status
+
+Allow opening saved files using Android-supported URI mechanisms.
+
+## 4. Retry failed transfers
+
+Implement safe retry behavior.
+
+Do not duplicate successful transfers.
+
+Use transfer identifiers and verify the current state before retrying.
+
+## 5. Transfer cancellation
+
+Allow cancellation when supported.
+
+Make sure both devices receive the correct cancellation state.
+
+## 6. Device management
+
+Show connected, disconnected and recently seen devices.
+
+Allow disconnecting an endpoint.
+
+## 7. Privacy and security
+
+Keep transfers offline through Nearby Connections.
+
+Retain connection authentication.
+
+Keep receiver consent.
+
+Validate incoming metadata and filenames.
+
+Do not execute received files.
+
+Do not automatically open received files.
+
+Avoid leaking private device identifiers in exported logs.
+
+## 8. Gesture settings
+
+Provide configurable:
+
+- Gesture sensitivity
+- Recognition confidence threshold
+- Gesture cooldown
+- Camera selection where supported
+- Haptic feedback
+- Sound feedback
+- Gesture mode enable/disable
+
+Do not alter the trained model's class mapping without validation.
+
+---
+
+# PART 9 — GESTURE ENGINE RELIABILITY
+
+Preserve the existing trained model and labels.
+
+Do not retrain the model unnecessarily.
+
+Inspect:
+
+- Model initialization
+- Camera frame conversion
+- Input preprocessing
+- ONNX tensor dimensions
+- Model output mapping
+- Confidence threshold
+- Temporal stabilization
+- State transitions
+- Gesture cooldown
+- Gesture event deduplication
+
+Ensure that:
+
+- A held gesture does not repeatedly trigger an action.
+- A fresh gesture can trigger the next action.
+- Gesture transitions are visually understandable.
+- Low-confidence predictions do not trigger destructive actions.
+- Camera permission failures are reported accurately.
+- Camera interruptions do not crash the app.
+- The camera and transfer operations do not block the main UI thread.
+
+Do not make the model appear more accurate by hardcoding predictions.
+
+---
+
+# PART 10 — PERFORMANCE AND ANDROID COMPATIBILITY
+
+The application must remain usable on mid-range and lower-end Android devices.
+
+Optimize:
+
+- Camera frame processing
+- ONNX inference
+- Memory usage
+- Bitmap handling
+- File copying
+- Hash calculation
+- Compose recomposition
+- Animations
+- Blur effects
+- Database operations
+
+Use background dispatchers for file operations and inference where appropriate.
+
+Do not block the UI thread.
+
+Avoid excessive allocations per camera frame.
+
+Do not hold large image/video files in memory unnecessarily.
+
+Ensure correct lifecycle handling when:
+
+- App enters background
+- Screen rotates
+- User returns from file picker
+- Camera permission is revoked
+- Device disconnects
+- Transfer is interrupted
+- App is killed and restarted
+
+Do not claim compatibility with every Android device without testing.
+
+---
+
+# PART 11 — AUTOMATED TESTS
+
+Update existing tests and add new tests.
+
+At minimum, test:
+
+## Diagnostics
+
+- Error code mapping
+- Unknown exception handling
+- Stack trace recording
+- Report generation
+- Log filtering
+- Log retention
+
+## Multi-device
+
+- One connected device
+- Three connected devices
+- Five connected devices
+- Device lost
+- Device reconnects
+- Selection cycling
+- Direct touch selection
+- Selected device disconnects before firing
+- No selected recipient
+- Multiple recipients selected
+- One recipient fails while another succeeds
+
+## Gestures
+
+- Activate
+- Grab
+- Point
+- Three-gun
+- Stop
+- Repeated held gesture
+- Low confidence
+- Missing staged content
+- No connected recipient
+
+## File transfer
+
+- Text transfer
+- Image transfer
+- PDF transfer
+- Large file transfer
+- Out-of-order metadata and file arrival
+- Interrupted transfer
+- Insufficient storage
+- URI permission failure
+- SHA-256 mismatch
+- File copy failure
+- MediaStore export failure
+- Successful retry
+- Cancellation
+
+## UI
+
+- Navigation
+- Dark and light themes if implemented
+- Accessibility
+- Diagnostics report copying
+- Device selection overlay
+- Transfer progress states
+
+Do not merely report that tests pass. Actually run the available tests and report their output.
+
+---
+
+# PART 12 — IMPLEMENTATION RULES
+
+Follow these strict rules:
+
+1. Work on the existing project.
+2. Preserve existing architecture unless a change is genuinely necessary.
+3. Preserve the trained ONNX model and MediaPipe assets.
+4. Preserve the existing Nearby Connections implementation where it works.
+5. Do not replace real Nearby Connections with mock networking.
+6. Do not create fake discovered devices.
+7. Do not hardcode successful transfers.
+8. Do not fabricate diagnostic data.
+9. Do not remove the receiver's Accept/Decline consent.
+10. Do not change the application ID.
+11. Do not introduce unnecessary paid APIs or cloud dependencies.
+12. Keep the transfer process offline.
+13. Keep secrets and sensitive information out of logs.
+14. Do not add unnecessary permissions.
+15. Do not introduce a backend unless absolutely required.
+16. Reuse existing dependencies wherever possible.
+17. Preserve existing Room data and migrations.
+18. Avoid unrelated refactoring.
+19. Do not stop after creating UI mockups.
+20. Implement real functionality and connect it to the existing state and repositories.
+
+If a feature cannot be safely implemented with the existing architecture, explain why and provide a staged implementation rather than pretending it works.
+
+---
+
+# PART 13 — FINAL DELIVERABLES
+
+When implementation is complete, provide:
+
+1. Summary of the codebase audit.
+2. Root cause of the existing file transfer failure.
+3. Exact files changed.
+4. New files created.
+5. Explanation of the new Diagnostics system.
+6. Explanation of the multi-device recipient selection flow.
+7. Explanation of the gesture state-machine changes.
+8. Explanation of the glassmorphism design system.
+9. Confirmation that all visible Air Share AI branding has been replaced by GestoShare.
+10. Tests executed and their actual results.
+11. Debug APK build result.
+12. Release APK build status if possible.
+13. Any remaining known limitations.
+14. Exact instructions for installing and testing the updated APK on two or more Android phones.
+
+Build the application.
+
+Do not provide only a plan or a design proposal.
+
+The final objective is a fully functional, polished GestoShare application in which I can:
+
+- Discover several nearby phones.
+- Connect and authenticate with them.
+- See all connected recipients.
+- Use the point gesture to cycle between recipients.
+- Clearly see which device is selected.
+- Use the three-gun gesture to send only to that device.
+- Have the receiver accept or decline.
+- Reliably receive, copy, verify and save files.
+- Understand exactly why something failed through the Diagnostics & Error Center.
+- Copy a complete technical error report and give it to you for further debugging.
+- Enjoy a consistent premium glassmorphism UI with the correct GestoShare branding.
+
+Prioritize correctness, reliability, security and a genuinely working implementation over visual decoration or unnecessary features.

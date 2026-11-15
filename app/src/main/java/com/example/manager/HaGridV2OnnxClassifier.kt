@@ -9,6 +9,9 @@ import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
 import android.content.Context
 import android.util.Log
+import com.example.data.DiagnosticsRepository
+import com.example.model.DiagnosticCategory
+import com.example.model.DiagnosticCodes
 import com.example.model.GestureResult
 import com.example.model.GestureType
 import org.json.JSONObject
@@ -37,7 +40,8 @@ data class OnnxModelDiagnostics(
  */
 class HaGridV2OnnxClassifier(
     private val context: Context,
-    private val requiredAssetOverrides: List<String>? = null
+    private val requiredAssetOverrides: List<String>? = null,
+    private val diagnosticsRepository: DiagnosticsRepository? = null
 ) : GestureClassifier {
 
     companion object {
@@ -119,6 +123,13 @@ class HaGridV2OnnxClassifier(
         if (missing.isNotEmpty()) {
             val msg = "Missing required asset(s) in app/src/main/assets/: ${missing.joinToString(", ")}"
             Log.e(TAG, msg)
+            diagnosticsRepository?.recordError(
+                code = DiagnosticCodes.GS_GESTURE_001,
+                category = DiagnosticCategory.MODEL,
+                sourceComponent = TAG,
+                operation = "initializeClassifier",
+                summary = msg
+            )
             diagnostics = OnnxModelDiagnostics(
                 isLoaded = false,
                 missingAssets = missing,
@@ -240,6 +251,13 @@ class HaGridV2OnnxClassifier(
             ortSession = null
             val errMsg = "ONNX initialization failed: ${e.localizedMessage ?: e.javaClass.simpleName}"
             Log.e(TAG, errMsg, e)
+            diagnosticsRepository?.recordException(
+                throwable = e,
+                sourceComponent = TAG,
+                operation = "initializeClassifier",
+                defaultCode = DiagnosticCodes.GS_GESTURE_002,
+                defaultCategory = DiagnosticCategory.MODEL
+            )
             diagnostics = OnnxModelDiagnostics(
                 isLoaded = false,
                 missingAssets = emptyList(),

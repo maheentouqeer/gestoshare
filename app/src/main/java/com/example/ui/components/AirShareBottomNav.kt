@@ -27,10 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.ScreenRoute
-import com.example.ui.theme.DarkBackground
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.GestoTheme
 
 sealed class NavItem(
     val route: ScreenRoute,
@@ -51,6 +48,7 @@ fun AirShareBottomNav(
     onNavigate: (ScreenRoute) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val palette = GestoTheme.colors
     val items = listOf(
         NavItem.Home,
         NavItem.Content,
@@ -64,14 +62,10 @@ fun AirShareBottomNav(
             .fillMaxWidth()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xBA0C152B),
-                        Color(0xE8070C18)
-                    )
+                    colors = listOf(palette.bottomBarStart, palette.bottomBarEnd)
                 )
             )
     ) {
-        // Specular frosted glass top rim
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -80,8 +74,8 @@ fun AirShareBottomNav(
                     Brush.horizontalGradient(
                         listOf(
                             Color.Transparent,
-                            Color.White.copy(alpha = 0.22f),
-                            NeonCyan.copy(alpha = 0.35f),
+                            palette.glassBorder,
+                            palette.accentPrimary.copy(alpha = 0.35f),
                             Color.Transparent
                         )
                     )
@@ -91,7 +85,7 @@ fun AirShareBottomNav(
         NavigationBar(
             modifier = Modifier.testTag("airshare_bottom_nav"),
             containerColor = Color.Transparent,
-            contentColor = TextPrimary,
+            contentColor = palette.textPrimary,
             tonalElevation = 0.dp
         ) {
             items.forEach { item ->
@@ -114,11 +108,11 @@ fun AirShareBottomNav(
                         )
                     },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = DarkBackground,
-                        selectedTextColor = NeonCyan,
-                        indicatorColor = NeonCyan,
-                        unselectedIconColor = TextSecondary,
-                        unselectedTextColor = TextSecondary
+                        selectedIconColor = palette.onAccentPrimary,
+                        selectedTextColor = palette.accentPrimary,
+                        indicatorColor = palette.accentPrimary,
+                        unselectedIconColor = palette.textSecondary,
+                        unselectedTextColor = palette.textSecondary
                     ),
                     modifier = Modifier.testTag(item.testTag)
                 )

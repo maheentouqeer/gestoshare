@@ -6,6 +6,9 @@ import android.graphics.Matrix
 import android.os.SystemClock
 import android.util.Log
 import androidx.camera.core.ImageProxy
+import com.example.data.DiagnosticsRepository
+import com.example.model.DiagnosticCategory
+import com.example.model.DiagnosticCodes
 import com.example.model.GestureResult
 import com.example.model.GestureType
 import com.google.mediapipe.framework.image.BitmapImageBuilder
@@ -82,7 +85,8 @@ class MediaPipeHandTracker(
     val classifier: GestureClassifier = HaGridV2OnnxClassifier(context),
     val stabilizer: TemporalGestureStabilizer = TemporalGestureStabilizer(
         TemporalGestureConfig(confidenceThreshold = classifier.getConfidenceThreshold())
-    )
+    ),
+    private val diagnosticsRepository: DiagnosticsRepository? = null
 ) {
 
     companion object {
@@ -260,9 +264,17 @@ class MediaPipeHandTracker(
             Log.i(TAG, "MediaPipe LIVE_STREAM initialized. ONNX loaded=$modelOk")
         } catch (_: FileNotFoundException) {
             handLandmarker = null
+            val msg = "Missing assets/$HAND_LANDMARKER_ASSET. Place official task file to enable 21-landmark detection."
             _trackingState.value = _trackingState.value.copy(
                 status = HandTrackerStatus.MODEL_MISSING,
-                statusMessage = "Missing assets/$HAND_LANDMARKER_ASSET. Place official task file to enable 21-landmark detection."
+                statusMessage = msg
+            )
+            diagnosticsRepository?.recordError(
+                code = DiagnosticCodes.GS_GESTURE_001,
+                category = DiagnosticCategory.MODEL,
+                sourceComponent = TAG,
+                operation = "initializeLandmarker",
+                summary = msg
             )
             Log.w(TAG, "Asset $HAND_LANDMARKER_ASSET not found in app/src/main/assets/")
         } catch (e: Exception) {
@@ -270,6 +282,13 @@ class MediaPipeHandTracker(
             _trackingState.value = _trackingState.value.copy(
                 status = HandTrackerStatus.CAMERA_ERROR,
                 statusMessage = "MediaPipe init error: ${e.localizedMessage ?: e.javaClass.simpleName}"
+            )
+            diagnosticsRepository?.recordException(
+                throwable = e,
+                sourceComponent = TAG,
+                operation = "initializeLandmarker",
+                defaultCode = DiagnosticCodes.GS_GESTURE_003,
+                defaultCategory = DiagnosticCategory.CAMERA
             )
             Log.e(TAG, "Error initializing MediaPipe HandLandmarker", e)
         }
@@ -310,6 +329,13 @@ class MediaPipeHandTracker(
             isHandDetected = false,
             landmarks = emptyList(),
             statusMessage = message
+        )
+        diagnosticsRepository?.recordError(
+            code = DiagnosticCodes.GS_GESTURE_003,
+            category = DiagnosticCategory.CAMERA,
+            sourceComponent = TAG,
+            operation = "reportCameraError",
+            summary = message
         )
     }
 
@@ -377,7 +403,17 @@ class MediaPipeHandTracker(
                 lastFrameTimestampMs = next
                 next
             }
-            pendingStartTimesNs[timestampMs] = System.nanoTime()
+            val nowNs = System.nanoTime()
+            if (pendingStartTimesNs.size > 8) {
+                val cutoffNs = nowNs - 5_000_000_000L
+                val iterator = pendingStartTimesNs.entries.iterator()
+                while (iterator.hasNext()) {
+                    if (iterator.next().value < cutoffNs) {
+                        iterator.remove()
+                    }
+                }
+            }
+            pendingStartTimesNs[timestampMs] = nowNs
 
             val mpImage = BitmapImageBuilder(uprightBitmap).build()
             landmarker.detectAsync(mpImage, timestampMs)
@@ -469,6 +505,7 @@ class MediaPipeHandTracker(
 
     private fun onLiveStreamError(error: RuntimeException) {
         Log.e(TAG, "MediaPipe LIVE_STREAM error", error)
+        pendingStartTimesNs.clear()
         isProcessing.set(false)
         _trackingState.value = _trackingState.value.copy(
             status = HandTrackerStatus.CAMERA_ERROR,

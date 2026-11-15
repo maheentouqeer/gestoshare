@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -64,16 +65,9 @@ import coil.compose.AsyncImage
 import com.example.model.ContentItem
 import com.example.model.ContentType
 import com.example.ui.ScreenRoute
-import com.example.ui.theme.DarkBackground
-import com.example.ui.theme.DarkSurface
-import com.example.ui.theme.ElectricViolet
-import com.example.ui.theme.EmeraldSuccess
+import com.example.ui.components.GlassStatusBadge
 import com.example.ui.theme.GlassCard
-import com.example.ui.theme.GlassFillElevated
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.RoseError
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.GestoTheme
 import com.example.ui.theme.glassSurface
 
 @Composable
@@ -88,8 +82,10 @@ fun ContentSelectionScreen(
     formatSize: (Long) -> String,
     modifier: Modifier = Modifier
 ) {
+    val palette = GestoTheme.colors
     var showTextInputDialog by remember { mutableStateOf(false) }
     var showUrlInputDialog by remember { mutableStateOf(false) }
+    var previewedItem by remember { mutableStateOf<ContentItem?>(null) }
 
     val documentPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
@@ -118,7 +114,7 @@ fun ContentSelectionScreen(
                 text = "Import Content",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = TextPrimary
+                color = palette.textPrimary
             )
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -132,7 +128,7 @@ fun ContentSelectionScreen(
                         .clickable { documentPickerLauncher.launch(arrayOf("*/*")) }
                         .testTag("saf_import_button"),
                     cornerRadius = 16.dp,
-                    borderAccent = NeonCyan.copy(alpha = 0.4f)
+                    borderAccent = palette.accentPrimary.copy(alpha = 0.4f)
                 ) {
                     Column(
                         modifier = Modifier
@@ -143,13 +139,17 @@ fun ContentSelectionScreen(
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
-                                .glassSurface(cornerRadius = 20.dp, fillColor = Color(0x66060B18), borderAccent = NeonCyan.copy(alpha = 0.55f)),
+                                .glassSurface(
+                                    cornerRadius = 20.dp,
+                                    fillColor = palette.glassFillInset,
+                                    borderAccent = palette.accentPrimary.copy(alpha = 0.55f)
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Description,
                                 contentDescription = "SAF Files",
-                                tint = NeonCyan,
+                                tint = palette.accentPrimary,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -158,12 +158,12 @@ fun ContentSelectionScreen(
                             text = "SAF Files / PDF",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = TextPrimary
+                            color = palette.textPrimary
                         )
                         Text(
                             text = "Open Document",
                             fontSize = 10.sp,
-                            color = TextSecondary
+                            color = palette.textSecondary
                         )
                     }
                 }
@@ -178,7 +178,7 @@ fun ContentSelectionScreen(
                         }
                         .testTag("photo_picker_button"),
                     cornerRadius = 16.dp,
-                    borderAccent = ElectricViolet.copy(alpha = 0.4f)
+                    borderAccent = palette.accentSecondary.copy(alpha = 0.4f)
                 ) {
                     Column(
                         modifier = Modifier
@@ -189,13 +189,17 @@ fun ContentSelectionScreen(
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
-                                .glassSurface(cornerRadius = 20.dp, fillColor = Color(0x66060B18), borderAccent = ElectricViolet.copy(alpha = 0.55f)),
+                                .glassSurface(
+                                    cornerRadius = 20.dp,
+                                    fillColor = palette.glassFillInset,
+                                    borderAccent = palette.accentSecondary.copy(alpha = 0.55f)
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Image,
                                 contentDescription = "Photos & Videos",
-                                tint = ElectricViolet,
+                                tint = palette.accentSecondary,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -204,12 +208,12 @@ fun ContentSelectionScreen(
                             text = "Media Picker",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = TextPrimary
+                            color = palette.textPrimary
                         )
                         Text(
                             text = "Photos & Videos",
                             fontSize = 10.sp,
-                            color = TextSecondary
+                            color = palette.textSecondary
                         )
                     }
                 }
@@ -227,8 +231,8 @@ fun ContentSelectionScreen(
                         .clickable { showTextInputDialog = true }
                         .testTag("text_note_button"),
                     cornerRadius = 14.dp,
-                    fillColor = GlassFillElevated,
-                    borderAccent = NeonCyan.copy(alpha = 0.35f)
+                    fillColor = palette.glassFillElevated,
+                    borderAccent = palette.accentPrimary.copy(alpha = 0.35f)
                 ) {
                     Row(
                         modifier = Modifier
@@ -240,14 +244,14 @@ fun ContentSelectionScreen(
                         Icon(
                             imageVector = Icons.Default.NoteAdd,
                             contentDescription = "Text Note",
-                            tint = NeonCyan,
+                            tint = palette.accentPrimary,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
                             text = "Add Text Note",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = TextPrimary
+                            color = palette.textPrimary
                         )
                     }
                 }
@@ -258,8 +262,8 @@ fun ContentSelectionScreen(
                         .clickable { showUrlInputDialog = true }
                         .testTag("url_link_button"),
                     cornerRadius = 14.dp,
-                    fillColor = GlassFillElevated,
-                    borderAccent = ElectricViolet.copy(alpha = 0.35f)
+                    fillColor = palette.glassFillElevated,
+                    borderAccent = palette.accentSecondary.copy(alpha = 0.35f)
                 ) {
                     Row(
                         modifier = Modifier
@@ -271,14 +275,14 @@ fun ContentSelectionScreen(
                         Icon(
                             imageVector = Icons.Default.Link,
                             contentDescription = "URL Link",
-                            tint = ElectricViolet,
+                            tint = palette.accentSecondary,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
                             text = "Share Web Link",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = TextPrimary
+                            color = palette.textPrimary
                         )
                     }
                 }
@@ -295,7 +299,7 @@ fun ContentSelectionScreen(
                     text = "Staged Content (${stagedItems.size})",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    color = palette.textPrimary
                 )
 
                 if (stagedItems.isNotEmpty()) {
@@ -305,7 +309,7 @@ fun ContentSelectionScreen(
                     ) {
                         Text(
                             text = "Clear All",
-                            color = RoseError,
+                            color = palette.error,
                             fontSize = 12.sp
                         )
                     }
@@ -326,13 +330,17 @@ fun ContentSelectionScreen(
                         Box(
                             modifier = Modifier
                                 .size(56.dp)
-                                .glassSurface(cornerRadius = 28.dp, fillColor = Color(0x66060B18), borderAccent = NeonCyan.copy(alpha = 0.45f)),
+                                .glassSurface(
+                                    cornerRadius = 28.dp,
+                                    fillColor = palette.glassFillInset,
+                                    borderAccent = palette.accentPrimary.copy(alpha = 0.45f)
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Add,
                                 contentDescription = null,
-                                tint = NeonCyan,
+                                tint = palette.accentPrimary,
                                 modifier = Modifier.size(28.dp)
                             )
                         }
@@ -340,13 +348,13 @@ fun ContentSelectionScreen(
                         Text(
                             text = "No files selected yet",
                             fontWeight = FontWeight.Bold,
-                            color = TextPrimary
+                            color = palette.textPrimary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "Import files above or share from any app via Android Sharesheet",
                             style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary,
+                            color = palette.textSecondary,
                             textAlign = TextAlign.Center
                         )
                     }
@@ -357,9 +365,10 @@ fun ContentSelectionScreen(
                 GlassCard(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .clickable { previewedItem = item }
                         .testTag("content_item_${item.id}"),
                     cornerRadius = 16.dp,
-                    borderAccent = NeonCyan.copy(alpha = 0.35f)
+                    borderAccent = palette.accentPrimary.copy(alpha = 0.35f)
                 ) {
                     Row(
                         modifier = Modifier
@@ -372,7 +381,7 @@ fun ContentSelectionScreen(
                             modifier = Modifier
                                 .size(52.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .glassSurface(cornerRadius = 12.dp, fillColor = Color(0x66060B18)),
+                                .glassSurface(cornerRadius = 12.dp, fillColor = palette.glassFillInset),
                             contentAlignment = Alignment.Center
                         ) {
                             if (item.thumbnailUri != null) {
@@ -392,14 +401,14 @@ fun ContentSelectionScreen(
                                         ContentType.URL -> Icons.Default.Link
                                         ContentType.GENERIC_FILE -> Icons.Default.Description
                                     },
-                                    contentDescription = null,
+                                    contentDescription = item.type.name,
                                     tint = when (item.type) {
-                                        ContentType.IMAGE -> NeonCyan
-                                        ContentType.VIDEO -> ElectricViolet
-                                        ContentType.DOCUMENT_PDF -> RoseError
-                                        ContentType.TEXT -> Color(0xFFF59E0B)
-                                        ContentType.URL -> NeonCyan
-                                        ContentType.GENERIC_FILE -> TextSecondary
+                                        ContentType.IMAGE -> palette.accentPrimary
+                                        ContentType.VIDEO -> palette.accentSecondary
+                                        ContentType.DOCUMENT_PDF -> palette.error
+                                        ContentType.TEXT -> palette.warning
+                                        ContentType.URL -> palette.accentPrimary
+                                        ContentType.GENERIC_FILE -> palette.textSecondary
                                     },
                                     modifier = Modifier.size(26.dp)
                                 )
@@ -411,7 +420,7 @@ fun ContentSelectionScreen(
                                 text = item.name,
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = TextPrimary,
+                                color = palette.textPrimary,
                                 maxLines = 1
                             )
                             Spacer(modifier = Modifier.height(2.dp))
@@ -420,7 +429,7 @@ fun ContentSelectionScreen(
                                     text = item.mimeType,
                                     fontSize = 11.sp,
                                     fontFamily = FontFamily.Monospace,
-                                    color = TextSecondary,
+                                    color = palette.textSecondary,
                                     maxLines = 1,
                                     modifier = Modifier.weight(1f, fill = false)
                                 )
@@ -428,7 +437,7 @@ fun ContentSelectionScreen(
                                     text = "· ${formatSize(item.sizeBytes)}",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = NeonCyan
+                                    color = palette.accentPrimary
                                 )
                             }
                             if (!item.sha256Hash.isNullOrBlank()) {
@@ -440,14 +449,14 @@ fun ContentSelectionScreen(
                                     Icon(
                                         imageVector = Icons.Default.Lock,
                                         contentDescription = "SHA-256 Ready",
-                                        tint = EmeraldSuccess,
+                                        tint = palette.success,
                                         modifier = Modifier.size(11.dp)
                                     )
                                     Text(
                                         text = "SHA-256: ${item.sha256Hash.take(14)}...",
                                         fontSize = 10.sp,
                                         fontFamily = FontFamily.Monospace,
-                                        color = EmeraldSuccess
+                                        color = palette.success
                                     )
                                 }
                             }
@@ -460,7 +469,7 @@ fun ContentSelectionScreen(
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "Remove",
-                                tint = TextSecondary,
+                                tint = palette.textSecondary,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -479,8 +488,8 @@ fun ContentSelectionScreen(
                             .testTag("aim_gesture_button"),
                         shape = RoundedCornerShape(16.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = NeonCyan,
-                            contentColor = DarkBackground
+                            containerColor = palette.accentPrimary,
+                            contentColor = palette.onAccentPrimary
                         )
                     ) {
                         Row(
@@ -507,7 +516,7 @@ fun ContentSelectionScreen(
                             .height(50.dp)
                             .testTag("select_device_button"),
                         shape = RoundedCornerShape(14.dp),
-                        border = BorderStroke(1.dp, ElectricViolet)
+                        border = BorderStroke(1.dp, palette.accentSecondary)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -515,13 +524,13 @@ fun ContentSelectionScreen(
                         ) {
                             Text(
                                 text = "Send Directly via Nearby Devices",
-                                color = ElectricViolet,
+                                color = palette.accentSecondary,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                                 contentDescription = null,
-                                tint = ElectricViolet,
+                                tint = palette.accentSecondary,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
@@ -531,11 +540,81 @@ fun ContentSelectionScreen(
         }
     }
 
+    // Rich Staged Content Preview Modal
+    previewedItem?.let { item ->
+        AlertDialog(
+            onDismissRequest = { previewedItem = null },
+            containerColor = palette.dialogSurface,
+            title = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    GlassStatusBadge(label = item.type.name, color = palette.accentPrimary)
+                    Text(
+                        text = item.name,
+                        color = palette.textPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (item.thumbnailUri != null) {
+                        AsyncImage(
+                            model = item.thumbnailUri,
+                            contentDescription = item.name,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 220.dp)
+                                .clip(RoundedCornerShape(12.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                    if (!item.textContent.isNullOrBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .glassSurface(
+                                    cornerRadius = 10.dp,
+                                    fillColor = palette.glassFillInset,
+                                    borderAccent = palette.glassBorder
+                                )
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = item.textContent,
+                                fontSize = 12.sp,
+                                color = palette.textPrimary
+                            )
+                        }
+                    }
+                    Text(
+                        text = "MIME: ${item.mimeType}\nSize: ${formatSize(item.sizeBytes)}\nSHA-256: ${item.sha256Hash ?: "Computed on send"}",
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = palette.textSecondary
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { previewedItem = null },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = palette.accentPrimary,
+                        contentColor = palette.onAccentPrimary
+                    )
+                ) {
+                    Text("Close", fontWeight = FontWeight.Bold)
+                }
+            }
+        )
+    }
+
     if (showTextInputDialog) {
         var noteText by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showTextInputDialog = false },
-            title = { Text("Add Text Note to Share", color = TextPrimary) },
+            containerColor = palette.dialogSurface,
+            title = { Text("Add Text Note to Share", color = palette.textPrimary) },
             text = {
                 OutlinedTextField(
                     value = noteText,
@@ -543,10 +622,10 @@ fun ContentSelectionScreen(
                     placeholder = { Text("Type text or message...") },
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = NeonCyan,
-                        unfocusedBorderColor = Color(0xFF334155),
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
+                        focusedBorderColor = palette.accentPrimary,
+                        unfocusedBorderColor = palette.glassBorder,
+                        focusedTextColor = palette.textPrimary,
+                        unfocusedTextColor = palette.textPrimary
                     )
                 )
             },
@@ -558,17 +637,19 @@ fun ContentSelectionScreen(
                             showTextInputDialog = false
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = DarkBackground)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = palette.accentPrimary,
+                        contentColor = palette.onAccentPrimary
+                    )
                 ) {
                     Text("Add")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showTextInputDialog = false }) {
-                    Text("Cancel", color = TextSecondary)
+                    Text("Cancel", color = palette.textSecondary)
                 }
-            },
-            containerColor = DarkSurface
+            }
         )
     }
 
@@ -576,7 +657,8 @@ fun ContentSelectionScreen(
         var urlText by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showUrlInputDialog = false },
-            title = { Text("Share Website Link", color = TextPrimary) },
+            containerColor = palette.dialogSurface,
+            title = { Text("Share Website Link", color = palette.textPrimary) },
             text = {
                 OutlinedTextField(
                     value = urlText,
@@ -584,10 +666,10 @@ fun ContentSelectionScreen(
                     placeholder = { Text("https://example.com") },
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = ElectricViolet,
-                        unfocusedBorderColor = Color(0xFF334155),
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
+                        focusedBorderColor = palette.accentSecondary,
+                        unfocusedBorderColor = palette.glassBorder,
+                        focusedTextColor = palette.textPrimary,
+                        unfocusedTextColor = palette.textPrimary
                     )
                 )
             },
@@ -599,17 +681,19 @@ fun ContentSelectionScreen(
                             showUrlInputDialog = false
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ElectricViolet, contentColor = Color.White)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = palette.accentSecondary,
+                        contentColor = Color.White
+                    )
                 ) {
                     Text("Add Link")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showUrlInputDialog = false }) {
-                    Text("Cancel", color = TextSecondary)
+                    Text("Cancel", color = palette.textSecondary)
                 }
-            },
-            containerColor = DarkSurface
+            }
         )
     }
 }

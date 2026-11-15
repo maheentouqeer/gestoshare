@@ -4,8 +4,11 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.example.data.DiagnosticsRepository
 import com.example.model.ContentItem
 import com.example.model.ContentType
+import com.example.model.DiagnosticCategory
+import com.example.model.DiagnosticCodes
 import com.example.util.HashUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -24,21 +27,20 @@ interface ContentImportManager {
     fun clearOutgoingCache(context: Context)
 }
 
-class DefaultContentImportManager : ContentImportManager {
+class DefaultContentImportManager(
+    private val diagnostics: DiagnosticsRepository? = null
+) : ContentImportManager {
 
     override suspend fun importFromUri(context: Context, uri: Uri): ContentItem? = withContext(Dispatchers.IO) {
         try {
             val contentResolver = context.contentResolver
 
-            // Persist URI read access when supported (e.g., SAF ACTION_OPEN_DOCUMENT)
             try {
                 contentResolver.takePersistableUriPermission(
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             } catch (_: SecurityException) {
-                // Ephemeral Sharesheet / Photo Picker URIs do not grant persistable access;
-                // copying to local app cache below guarantees uninterrupted read access.
             } catch (_: Exception) {
             }
 
@@ -59,15 +61,34 @@ class DefaultContentImportManager : ContentImportManager {
                 }
             }
 
-            val safeName = sanitizeFileName(fileName)
+            val safeName = HashUtil.sanitizeFileName(fileName, "shared_file")
             val cacheDir = File(context.cacheDir, "outgoing").apply { mkdirs() }
+            if (fileSize > 0L && cacheDir.usableSpace < fileSize + 512L * 1024L) {
+                diagnostics?.recordError(
+                    code = DiagnosticCodes.GS_FILE_005,
+                    category = DiagnosticCategory.STORAGE,
+                    sourceComponent = "ContentImportManager",
+                    operation = "importFromUri",
+                    summary = "Insufficient cache storage to import $safeName ($fileSize bytes)."
+                )
+                return@withContext null
+            }
             val cachedFile = File(cacheDir, "${UUID.randomUUID().toString().take(8)}_$safeName")
 
             contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(cachedFile).use { output ->
                     input.copyTo(output, bufferSize = 64 * 1024)
                 }
-            } ?: return@withContext null
+            } ?: run {
+                diagnostics?.recordError(
+                    code = DiagnosticCodes.GS_FILE_007,
+                    category = DiagnosticCategory.FILE_IO,
+                    sourceComponent = "ContentImportManager",
+                    operation = "importFromUri",
+                    summary = "Unable to open InputStream for imported URI: $uri"
+                )
+                return@withContext null
+            }
 
             if (fileSize <= 0L) {
                 fileSize = cachedFile.length()
@@ -87,7 +108,14 @@ class DefaultContentImportManager : ContentImportManager {
                 sha256Hash = sha256
             )
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("ContentImportManager", "Failed importing content URI", e)
+            diagnostics?.recordException(
+                throwable = e,
+                sourceComponent = "ContentImportManager",
+                operation = "importFromUri",
+                defaultCode = DiagnosticCodes.GS_FILE_007,
+                defaultCategory = DiagnosticCategory.FILE_IO
+            )
             null
         }
     }
@@ -148,10 +176,6 @@ class DefaultContentImportManager : ContentImportManager {
             File(context.cacheDir, "outgoing").deleteRecursively()
         } catch (_: Exception) {
         }
-    }
-
-    private fun sanitizeFileName(name: String): String {
-        return name.replace(Regex("[^a-zA-Z0-9._\\- ]"), "_").ifBlank { "shared_file" }
     }
 
     private fun sha256Bytes(bytes: ByteArray): String {

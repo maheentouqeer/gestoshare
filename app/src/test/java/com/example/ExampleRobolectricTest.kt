@@ -1,7 +1,10 @@
 package com.example
 
 import android.content.Context
+import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.AirShareDatabase
+import com.example.data.RoomTransferHistoryRepository
 import com.example.manager.DefaultContentImportManager
 import com.example.manager.DefaultGestureRecognitionManager
 import com.example.manager.DefaultTransferStateManager
@@ -10,6 +13,7 @@ import com.example.manager.GestureSessionContext
 import com.example.manager.HaGridV2OnnxClassifier
 import com.example.manager.MediaPipeHandTracker
 import com.example.manager.NormalizedLandmarkPoint
+import com.example.manager.RealNearbyTransferManager
 import com.example.manager.TemporalGestureConfig
 import com.example.manager.TemporalGestureStabilizer
 import com.example.model.ActiveTransfer
@@ -24,8 +28,13 @@ import com.example.model.GestureSessionState
 import com.example.model.GestureType
 import com.example.model.SessionStatus
 import com.example.model.TransferDirection
+import com.example.model.TransferItemMetadata
+import com.example.model.TransferRecord
 import com.example.model.TransferStatus
 import com.example.util.HashUtil
+import com.example.util.PayloadManifestTracker
+import com.google.android.gms.nearby.connection.Strategy
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -37,6 +46,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import java.security.MessageDigest
 import kotlin.math.abs
 import kotlin.math.sqrt
 
@@ -800,6 +810,212 @@ class ExampleRobolectricTest {
         assertTrue(realEffect is GestureActionEffect.DispatchTransferOffer && !realEffect.isDryRun)
         // Crucial: THREE_GUN alone NEVER sets COMPLETED; awaits actual receiver consent & verification
         assertEquals(GestureSessionState.TRANSFER_OFFERED, realManager.sessionState.value)
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 9: Security, Robustness, Room Persistence & Payload Edge-Case Tests
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun `phase9_sanitizeFileName prevents path traversal dotfiles and preserves extensions`() {
+        assertEquals("passwd", HashUtil.sanitizeFileName("../../etc/passwd"))
+        assertEquals("evil.pdf", HashUtil.sanitizeFileName("..\\..\\Windows\\evil.pdf"))
+        assertEquals("shared_file", HashUtil.sanitizeFileName(".."))
+        assertEquals("shared_file", HashUtil.sanitizeFileName("."))
+        assertEquals("shared_file", HashUtil.sanitizeFileName("   "))
+        assertEquals("env", HashUtil.sanitizeFileName(".env"))
+        assertEquals("bad_dot_name.jpg", HashUtil.sanitizeFileName("bad..dot..name.jpg"))
+
+        val longName = "a".repeat(160) + ".pdf"
+        val sanitizedLong = HashUtil.sanitizeFileName(longName)
+        assertTrue(sanitizedLong.length <= 120)
+        assertTrue(sanitizedLong.endsWith(".pdf"))
+    }
+
+    @Test
+    fun `phase9_payloadManifestTracker handles out of order arrival and rejects duplicate claims`() {
+        val tracker = PayloadManifestTracker(transferId = "tx-order-1")
+        val meta0 = TransferItemMetadata(itemIndex = 0, name = "photo.jpg", mimeType = "image/jpeg", sizeBytes = 4096L, contentType = ContentType.IMAGE, sha256 = "abc")
+        val meta1 = TransferItemMetadata(itemIndex = 1, name = "doc.pdf", mimeType = "application/pdf", sizeBytes = 8192L, contentType = ContentType.DOCUMENT_PDF, sha256 = "def")
+
+        // Mismatched transferId must be rejected
+        assertFalse(tracker.registerManifest("tx-wrong", 101L, meta0))
+        assertFalse(tracker.hasMetadata(101L))
+
+        // Case A: Payload completes BEFORE TRANSFER_FILE_MAP arrives
+        tracker.markPayloadCompleted(202L)
+        assertNull(tracker.claimForVerification(202L))
+        assertTrue(tracker.pendingMetadataPayloadIds().contains(202L))
+
+        // TRANSFER_FILE_MAP arrives afterward -> claim succeeds once
+        assertTrue(tracker.registerManifest("tx-order-1", 202L, meta1))
+        assertFalse(tracker.pendingMetadataPayloadIds().contains(202L))
+        assertEquals(meta1, tracker.claimForVerification(202L))
+        // Duplicate SUCCESS update cannot re-claim the same payload
+        assertNull(tracker.claimForVerification(202L))
+        assertTrue(tracker.isProcessed(202L))
+
+        // Case B: TRANSFER_FILE_MAP arrives BEFORE payload completion
+        assertTrue(tracker.registerManifest("tx-order-1", 101L, meta0))
+        assertEquals(meta0, tracker.claimForVerification(101L))
+        assertNull(tracker.claimForVerification(101L))
+    }
+
+    @Test
+    fun `phase9_streaming sha256 handles multi-chunk 200KB binary stream accurately`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val largeFile = File(context.cacheDir, "phase9_200kb_test.bin")
+        try {
+            val data = ByteArray(200 * 1024) { idx -> ((idx * 31) and 0xFF).toByte() }
+            largeFile.writeBytes(data)
+
+            val expectedDigest = MessageDigest.getInstance("SHA-256").digest(data)
+                .joinToString("") { "%02x".format(it) }
+            val actualHash = HashUtil.calculateSha256(largeFile)
+
+            assertEquals(64, actualHash.length)
+            assertEquals(expectedDigest, actualHash)
+            assertTrue(HashUtil.verifyHash(actualHash, expectedDigest.uppercase()))
+        } finally {
+            largeFile.delete()
+        }
+    }
+
+    @Test
+    fun `phase9_roomTransferHistoryRepository inserts observes deletes and clears records`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(context, AirShareDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            val repo = RoomTransferHistoryRepository(db.transferDao())
+            val rec1 = TransferRecord(
+                id = "tx-room-1",
+                fileName = "Redmi_Photo.jpg",
+                fileType = "image/jpeg",
+                fileSizeFormatted = "2.4 MB",
+                senderName = "Redmi 1",
+                receiverName = "Infinix 1",
+                direction = TransferDirection.SEND,
+                status = TransferStatus.SUCCESS,
+                timestamp = 1000L,
+                sha256Verification = "SHA-256 Verified (abcd1234)"
+            )
+            val rec2 = TransferRecord(
+                id = "tx-room-2",
+                fileName = "Notes.pdf",
+                fileType = "application/pdf",
+                fileSizeFormatted = "450 KB",
+                senderName = "Redmi 2",
+                receiverName = "Redmi 1",
+                direction = TransferDirection.RECEIVE,
+                status = TransferStatus.FAILED,
+                timestamp = 2000L,
+                sha256Verification = "Unverified (FAILED)"
+            )
+
+            repo.insertTransfer(rec1)
+            repo.insertTransfer(rec2)
+
+            val allAfterInsert = repo.getAllTransfers().first()
+            assertEquals(2, allAfterInsert.size)
+            // Sorted DESC by timestamp
+            assertEquals("tx-room-2", allAfterInsert[0].id)
+            assertEquals("tx-room-1", allAfterInsert[1].id)
+
+            repo.deleteTransfer("tx-room-2")
+            val afterDelete = repo.getAllTransfers().first()
+            assertEquals(1, afterDelete.size)
+            assertEquals("tx-room-1", afterDelete[0].id)
+
+            repo.clearHistory()
+            assertTrue(repo.getAllTransfers().first().isEmpty())
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `phase9_stabilizer edge cases ignore classifier errors interrupt incomplete streak and support majority vote`() {
+        val stabilizer = TemporalGestureStabilizer(
+            TemporalGestureConfig(
+                windowSize = 5,
+                requiredConsecutiveFrames = 5,
+                useMajorityVote = true,
+                majorityVoteThreshold = 4,
+                confidenceThreshold = 0.80f,
+                holdDurationMs = 100L,
+                commandCooldownMs = 500L,
+                requireNeutralReset = true
+            )
+        )
+
+        val fistFrame = GestureResult(
+            gesture = GestureType.FIST,
+            confidence = 0.90f,
+            predictedClass = "fist",
+            isHandDetected = true,
+            isAccepted = true
+        )
+        val noHandFrame = GestureResult(
+            gesture = GestureType.NONE,
+            confidence = 0f,
+            predictedClass = "no hand",
+            isHandDetected = false,
+            isAccepted = false
+        )
+        val errFrame = GestureResult(
+            gesture = GestureType.NONE,
+            confidence = 0f,
+            predictedClass = "inference_error",
+            isHandDetected = true,
+            isAccepted = false,
+            errorMessage = "Transient runtime warning"
+        )
+
+        // Build 3 frames + runtime error (must be ignored safely without triggering)
+        stabilizer.process(fistFrame, 1000L)
+        stabilizer.process(fistFrame, 1040L)
+        stabilizer.process(fistFrame, 1080L)
+        val errDecision = stabilizer.process(errFrame, 1100L)
+        assertNull(errDecision.triggeredGesture)
+        assertTrue(errDecision.statusReason.contains("Ignored classifier error"))
+
+        // 4th FIST within 5-frame majority window + hold >= 100ms triggers
+        val fourthDecision = stabilizer.process(fistFrame, 1130L)
+        assertEquals(GestureType.FIST, fourthDecision.triggeredGesture)
+
+        // Removing hand clears streak & resets latch for next command
+        val dropped = stabilizer.process(noHandFrame, 1200L)
+        assertNull(dropped.triggeredGesture)
+        assertEquals(GestureType.NONE, dropped.stableGesture)
+        assertNull(dropped.awaitingNeutralResetFor)
+    }
+
+    @Test
+    fun `phase9_gesture workflow fails safely on connection drop mid-transfer and honors P2P strategy`() {
+        assertEquals("com.gestoshare.app.P2P_SERVICE", RealNearbyTransferManager.SERVICE_ID)
+        assertEquals(Strategy.P2P_CLUSTER, RealNearbyTransferManager.STRATEGY)
+
+        val manager = DefaultGestureRecognitionManager()
+        manager.setOperationMode(GestureOperationMode.GESTURE_TRANSFER)
+        val ctx = GestureSessionContext(
+            stagedItems = listOf(testItem),
+            discoveredDevices = listOf(peerA),
+            selectedDevice = peerA,
+            connectedDevice = peerA
+        )
+
+        manager.processCommandGesture(GestureType.LIKE, 0.95f, ctx)
+        manager.processCommandGesture(GestureType.FIST, 0.95f, ctx)
+        manager.processCommandGesture(GestureType.POINT, 0.95f, ctx)
+        manager.processCommandGesture(GestureType.THREE_GUN, 0.95f, ctx)
+        assertEquals(GestureSessionState.TRANSFER_OFFERED, manager.sessionState.value)
+
+        // Simulate peer disconnecting abruptly while waiting for receiver consent
+        manager.syncWithSystemState(ctx.copy(connectedDevice = null))
+        assertEquals(GestureSessionState.FAILED, manager.sessionState.value)
+        assertTrue(manager.sessionFeedback.value?.contains("Connection lost", ignoreCase = true) == true)
     }
 
     private fun buildCanonicalOpenPalmFeatures(imageWidth: Int, imageHeight: Int): FloatArray {

@@ -13,6 +13,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -21,38 +22,34 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * Full-screen luminous backdrop featuring a deep midnight obsidian gradient
- * and soft cyan/violet ambient orbs so frosted glass surfaces above it pick up
- * authentic depth and translucency without hurting 60fps or 30fps CameraX performance.
+ * Full-screen luminous atmospheric backdrop that adapts seamlessly between
+ * Midnight Obsidian Glass (dark) and Frosted Ice Glass (light).
  */
 @Composable
 fun GestoGlassBackground(
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit
 ) {
+    val palette = GestoTheme.colors
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF050814),
-                        Color(0xFF091126),
-                        Color(0xFF060A17)
-                    )
+                    colors = listOf(palette.bgTop, palette.bgMid, palette.bgBottom)
                 )
             )
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
+            val alphaScale = if (palette.isDark) 1f else 0.72f
 
-            // Top-left cyan atmospheric orb
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        NeonCyan.copy(alpha = 0.22f),
-                        NeonCyan.copy(alpha = 0.06f),
+                        palette.orbPrimary.copy(alpha = 0.22f * alphaScale),
+                        palette.orbPrimary.copy(alpha = 0.06f * alphaScale),
                         Color.Transparent
                     ),
                     center = Offset(w * 0.14f, h * 0.12f),
@@ -62,12 +59,11 @@ fun GestoGlassBackground(
                 center = Offset(w * 0.14f, h * 0.12f)
             )
 
-            // Mid-right electric violet orb
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        ElectricViolet.copy(alpha = 0.24f),
-                        ElectricViolet.copy(alpha = 0.07f),
+                        palette.orbSecondary.copy(alpha = 0.24f * alphaScale),
+                        palette.orbSecondary.copy(alpha = 0.07f * alphaScale),
                         Color.Transparent
                     ),
                     center = Offset(w * 0.88f, h * 0.44f),
@@ -77,11 +73,10 @@ fun GestoGlassBackground(
                 center = Offset(w * 0.88f, h * 0.44f)
             )
 
-            // Bottom-left teal glow
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        CyanDark.copy(alpha = 0.18f),
+                        palette.orbTertiary.copy(alpha = 0.18f * alphaScale),
                         Color.Transparent
                     ),
                     center = Offset(w * 0.22f, h * 0.86f),
@@ -97,24 +92,34 @@ fun GestoGlassBackground(
 }
 
 /**
- * Applies a frosted translucent glass fill + vertical specular sheen + luminous
- * top-left to bottom-right hairline border.
+ * Applies a theme-aware frosted translucent glass fill + vertical specular sheen + luminous
+ * top-left to bottom-right hairline border. Uses [Modifier.composed] so even existing calls
+ * automatically adapt to Dark/Light theme when custom colors aren't specified.
  */
 fun Modifier.glassSurface(
     cornerRadius: Dp = 20.dp,
-    fillColor: Color = GlassFill,
-    borderAccent: Color = GlassBorderSubtle,
+    fillColor: Color? = null,
+    borderAccent: Color? = null,
     borderWidth: Dp = 1.dp
-): Modifier {
+): Modifier = composed {
+    val palette = GestoTheme.colors
+    val resolvedFill = when {
+        fillColor == null -> palette.glassFill
+        // Map legacy hardcoded dark GlassFill constants cleanly when switching to light mode
+        !palette.isDark && (fillColor == GlassFill || fillColor == GlassFillElevated || fillColor.value == 0x66060B18UL || fillColor.value == 0x66060913UL || fillColor.value == 0x88060B18UL) ->
+            palette.glassFillInset
+        else -> fillColor
+    }
+    val resolvedBorder = borderAccent ?: palette.glassBorder
     val shape = RoundedCornerShape(cornerRadius)
-    return this
+    this
         .clip(shape)
-        .background(fillColor, shape)
+        .background(resolvedFill, shape)
         .background(
             Brush.verticalGradient(
                 colors = listOf(
-                    Color.White.copy(alpha = 0.09f),
-                    Color.White.copy(alpha = 0.02f)
+                    if (palette.isDark) Color.White.copy(alpha = 0.09f) else Color.White.copy(alpha = 0.45f),
+                    if (palette.isDark) Color.White.copy(alpha = 0.02f) else Color.White.copy(alpha = 0.12f)
                 )
             ),
             shape
@@ -123,9 +128,9 @@ fun Modifier.glassSurface(
             width = borderWidth,
             brush = Brush.linearGradient(
                 colors = listOf(
-                    Color.White.copy(alpha = 0.24f),
-                    borderAccent,
-                    Color.White.copy(alpha = 0.06f)
+                    if (palette.isDark) Color.White.copy(alpha = 0.26f) else Color.White.copy(alpha = 0.9f),
+                    resolvedBorder,
+                    if (palette.isDark) Color.White.copy(alpha = 0.06f) else palette.glassBorder.copy(alpha = 0.5f)
                 )
             ),
             shape = shape
@@ -133,40 +138,50 @@ fun Modifier.glassSurface(
 }
 
 /**
- * Reusable frosted glass Material 3 Card with translucent surface and specular edge border.
+ * Reusable frosted glass Material 3 Card that adapts between Dark Glass & Light Ice Glass.
  */
 @Composable
 fun GlassCard(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 20.dp,
-    fillColor: Color = GlassFill,
-    borderAccent: Color = NeonCyan.copy(alpha = 0.26f),
+    fillColor: Color? = null,
+    borderAccent: Color? = null,
     borderWidth: Dp = 1.dp,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val palette = GestoTheme.colors
+    val resolvedFill = when {
+        fillColor == null -> palette.glassFill
+        !palette.isDark && (fillColor == GlassFill || fillColor == GlassFillElevated) -> palette.glassFillElevated
+        else -> fillColor
+    }
+    val resolvedBorder = borderAccent ?: palette.accentPrimary.copy(alpha = if (palette.isDark) 0.28f else 0.32f)
     val shape = RoundedCornerShape(cornerRadius)
+
     Card(
-        modifier = modifier
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = 0.07f),
-                        Color.Transparent
-                    )
-                ),
-                shape = shape
+        modifier = modifier.background(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    if (palette.isDark) Color.White.copy(alpha = 0.07f) else Color.White.copy(alpha = 0.55f),
+                    Color.Transparent
+                )
             ),
+            shape = shape
+        ),
         shape = shape,
-        colors = CardDefaults.cardColors(containerColor = fillColor),
+        colors = CardDefaults.cardColors(containerColor = resolvedFill),
         border = BorderStroke(
             width = borderWidth,
             brush = Brush.linearGradient(
                 colors = listOf(
-                    Color.White.copy(alpha = 0.25f),
-                    borderAccent,
-                    Color.White.copy(alpha = 0.06f)
+                    if (palette.isDark) Color.White.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.92f),
+                    resolvedBorder,
+                    if (palette.isDark) Color.White.copy(alpha = 0.06f) else palette.glassBorder.copy(alpha = 0.6f)
                 )
             )
+        ),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (palette.isDark) 0.dp else 2.dp
         ),
         content = content
     )

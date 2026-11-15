@@ -17,9 +17,10 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -63,14 +65,7 @@ import com.example.manager.HandTrackerStatus
 import com.example.manager.HandTrackingState
 import com.example.manager.MediaPipeHandTracker
 import com.example.model.GestureResult
-import com.example.ui.theme.DarkBackground
-import com.example.ui.theme.ElectricViolet
-import com.example.ui.theme.EmeraldSuccess
-import com.example.ui.theme.GlassFillElevated
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.RoseError
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.GestoTheme
 import com.example.ui.theme.glassSurface
 
 @Composable
@@ -79,8 +74,12 @@ fun CameraPreviewPlaceholder(
     handTrackingState: HandTrackingState,
     handTracker: MediaPipeHandTracker,
     isTrackingHandFallback: Boolean,
+    useFrontCamera: Boolean = true,
+    onToggleCamera: (() -> Unit)? = null,
+    topOverlayContent: (@Composable BoxScope.() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val palette = GestoTheme.colors
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -106,7 +105,7 @@ fun CameraPreviewPlaceholder(
         }
     }
 
-    DisposableEffect(hasCameraPermission, lifecycleOwner) {
+    DisposableEffect(hasCameraPermission, lifecycleOwner, useFrontCamera) {
         var boundProvider: ProcessCameraProvider? = null
         if (hasCameraPermission) {
             val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
@@ -120,7 +119,14 @@ fun CameraPreviewPlaceholder(
                     }
 
                     val hasFront = cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)
-                    val cameraSelector = if (hasFront) {
+                    val hasBack = cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)
+                    val actualIsFront = when {
+                        useFrontCamera && hasFront -> true
+                        !useFrontCamera && hasBack -> false
+                        hasFront -> true
+                        else -> false
+                    }
+                    val cameraSelector = if (actualIsFront) {
                         CameraSelector.DEFAULT_FRONT_CAMERA
                     } else {
                         CameraSelector.DEFAULT_BACK_CAMERA
@@ -131,7 +137,7 @@ fun CameraPreviewPlaceholder(
                         .build()
                         .also { analysis ->
                             analysis.setAnalyzer(handTracker.analyzerExecutor) { imageProxy ->
-                                handTracker.analyzeImageProxy(imageProxy, isFrontCamera = hasFront)
+                                handTracker.analyzeImageProxy(imageProxy, isFrontCamera = actualIsFront)
                             }
                         }
 
@@ -174,7 +180,7 @@ fun CameraPreviewPlaceholder(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(24.dp))
-            .glassSurface(cornerRadius = 24.dp, borderAccent = NeonCyan.copy(alpha = 0.45f))
+            .glassSurface(cornerRadius = 24.dp, borderAccent = palette.accentPrimary.copy(alpha = 0.45f))
             .testTag("camera_preview_container")
     ) {
         if (hasCameraPermission) {
@@ -193,13 +199,13 @@ fun CameraPreviewPlaceholder(
                 Box(
                     modifier = Modifier
                         .size(64.dp)
-                        .glassSurface(cornerRadius = 32.dp, borderAccent = NeonCyan),
+                        .glassSurface(cornerRadius = 32.dp, borderAccent = palette.accentPrimary),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.CameraAlt,
                         contentDescription = "Camera Permission",
-                        tint = NeonCyan,
+                        tint = palette.accentPrimary,
                         modifier = Modifier.size(32.dp)
                     )
                 }
@@ -210,7 +216,7 @@ fun CameraPreviewPlaceholder(
                     text = "Camera Access Required",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    color = palette.textPrimary
                 )
 
                 Spacer(modifier = Modifier.height(6.dp))
@@ -218,7 +224,7 @@ fun CameraPreviewPlaceholder(
                 Text(
                     text = "GestoShare uses CameraX + MediaPipe to track 21 3D hand landmarks offline.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary,
+                    color = palette.textSecondary,
                     textAlign = TextAlign.Center
                 )
 
@@ -227,8 +233,8 @@ fun CameraPreviewPlaceholder(
                 Button(
                     onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = NeonCyan,
-                        contentColor = DarkBackground
+                        containerColor = palette.accentPrimary,
+                        contentColor = palette.onAccentPrimary
                     ),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.testTag("enable_camera_button")
@@ -240,29 +246,22 @@ fun CameraPreviewPlaceholder(
 
         // HUD Corner Brackets + Live 21-Landmark Hand Skeleton Overlay
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val strokeColor = NeonCyan.copy(alpha = pulseAlpha)
-            val cornerLength = 32.dp.toPx()
+            val strokeColor = palette.accentPrimary.copy(alpha = pulseAlpha)
+            val cornerLength = 30.dp.toPx()
             val strokeWidth = 2.5.dp.toPx()
-            val inset = 18.dp.toPx()
+            val inset = 14.dp.toPx()
             val w = size.width
             val h = size.height
 
-            // Corner reticles
             drawLine(strokeColor, Offset(inset, inset), Offset(inset + cornerLength, inset), strokeWidth)
             drawLine(strokeColor, Offset(inset, inset), Offset(inset, inset + cornerLength), strokeWidth)
-
             drawLine(strokeColor, Offset(w - inset, inset), Offset(w - inset - cornerLength, inset), strokeWidth)
             drawLine(strokeColor, Offset(w - inset, inset), Offset(w - inset, inset + cornerLength), strokeWidth)
-
             drawLine(strokeColor, Offset(inset, h - inset), Offset(inset + cornerLength, h - inset), strokeWidth)
             drawLine(strokeColor, Offset(inset, h - inset), Offset(inset, h - inset - cornerLength), strokeWidth)
-
             drawLine(strokeColor, Offset(w - inset, h - inset), Offset(w - inset - cornerLength, h - inset), strokeWidth)
             drawLine(strokeColor, Offset(w - inset, h - inset), Offset(w - inset, h - inset - cornerLength), strokeWidth)
 
-            // Draw real 21-landmark skeleton when MediaPipe detects a hand.
-            // MediaPipe runs on upright unmirrored frames (per preprocessing.json), so when using
-            // the front selfie PreviewView (which mirrors visually) we mirror only the Canvas X display.
             val points = handTrackingState.landmarks
             val mirrorOverlayX = handTrackingState.isFrontCamera
             if (points.size >= 21) {
@@ -272,7 +271,7 @@ fun CameraPreviewPlaceholder(
                     val ax = if (mirrorOverlayX) 1f - a.x else a.x
                     val bx = if (mirrorOverlayX) 1f - b.x else b.x
                     drawLine(
-                        color = ElectricViolet.copy(alpha = 0.9f),
+                        color = palette.accentSecondary.copy(alpha = 0.9f),
                         start = Offset(ax * w, a.y * h),
                         end = Offset(bx * w, b.y * h),
                         strokeWidth = 3.dp.toPx(),
@@ -287,8 +286,8 @@ fun CameraPreviewPlaceholder(
                     drawCircle(
                         color = when {
                             isWrist -> Color.White
-                            isTip -> NeonCyan
-                            else -> ElectricViolet
+                            isTip -> palette.accentPrimary
+                            else -> palette.accentSecondary
                         },
                         radius = if (isTip || isWrist) 5.5.dp.toPx() else 3.8.dp.toPx(),
                         center = center
@@ -297,58 +296,107 @@ fun CameraPreviewPlaceholder(
             }
         }
 
-        // Top Live Status Pill (FPS, Detection State, Missing Asset Warning)
-        Row(
+        // Top Docked Floating Content (Recipient Overlay + Status Strip) keeping center zone clear
+        Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 12.dp, start = 16.dp, end = 16.dp)
-                .glassSurface(
-                    cornerRadius = 20.dp,
-                    fillColor = Color(0xCC090E1B),
-                    borderAccent = when {
-                        handTrackingState.status == HandTrackerStatus.CAMERA_ERROR -> RoseError
-                        handTrackingState.status == HandTrackerStatus.MODEL_MISSING -> Color(0xFFF59E0B)
-                        handTrackingState.isHandDetected -> EmeraldSuccess
-                        else -> NeonCyan.copy(alpha = 0.4f)
-                    }
-                )
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .background(
-                        when {
-                            handTrackingState.status == HandTrackerStatus.CAMERA_ERROR -> RoseError
-                            handTrackingState.status == HandTrackerStatus.MODEL_MISSING -> Color(0xFFF59E0B)
-                            isHandDetected -> EmeraldSuccess
-                            else -> NeonCyan
-                        },
-                        CircleShape
-                    )
-            )
-            val statusText = when {
-                !hasCameraPermission -> "CAMERA PERMISSION NEEDED"
-                handTrackingState.status == HandTrackerStatus.MODEL_MISSING ->
-                    "ASSET MISSING (${handTrackingState.fps} FPS)"
-                handTrackingState.status == HandTrackerStatus.CAMERA_ERROR -> "CAMERA ERROR"
-                handTrackingState.isHandDetected ->
-                    "${handTrackingState.handedness.uppercase()} · ${handTrackingState.fps} FPS · MP ${handTrackingState.inferenceTimeMs}ms"
-                else -> "SCANNING HAND · ${handTrackingState.fps} FPS"
-            }
-            Text(
-                text = statusText,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace,
-                color = when {
-                    handTrackingState.status == HandTrackerStatus.MODEL_MISSING -> Color(0xFFF59E0B)
-                    isHandDetected -> EmeraldSuccess
-                    else -> TextPrimary
+            if (topOverlayContent != null) {
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    topOverlayContent()
                 }
-            )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier
+                        .glassSurface(
+                            cornerRadius = 18.dp,
+                            fillColor = if (palette.isDark) Color(0xCC090E1B) else Color(0xDDF4F8FF),
+                            borderAccent = when {
+                                handTrackingState.status == HandTrackerStatus.CAMERA_ERROR -> palette.error
+                                handTrackingState.status == HandTrackerStatus.MODEL_MISSING -> palette.warning
+                                handTrackingState.isHandDetected -> palette.success
+                                else -> palette.accentPrimary.copy(alpha = 0.4f)
+                            }
+                        )
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .background(
+                                when {
+                                    handTrackingState.status == HandTrackerStatus.CAMERA_ERROR -> palette.error
+                                    handTrackingState.status == HandTrackerStatus.MODEL_MISSING -> palette.warning
+                                    isHandDetected -> palette.success
+                                    else -> palette.accentPrimary
+                                },
+                                CircleShape
+                            )
+                    )
+                    val statusText = when {
+                        !hasCameraPermission -> "CAMERA PERMISSION NEEDED"
+                        handTrackingState.status == HandTrackerStatus.MODEL_MISSING ->
+                            "ASSET MISSING (${handTrackingState.fps} FPS)"
+                        handTrackingState.status == HandTrackerStatus.CAMERA_ERROR -> "CAMERA ERROR"
+                        handTrackingState.isHandDetected ->
+                            "${handTrackingState.handedness.uppercase()} · ${handTrackingState.fps} FPS · MP ${handTrackingState.inferenceTimeMs}ms"
+                        else -> "SCANNING HAND · ${handTrackingState.fps} FPS"
+                    }
+                    Text(
+                        text = statusText,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = when {
+                            handTrackingState.status == HandTrackerStatus.MODEL_MISSING -> palette.warning
+                            isHandDetected -> palette.success
+                            else -> palette.textPrimary
+                        }
+                    )
+                }
+
+                if (onToggleCamera != null) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .glassSurface(
+                                cornerRadius = 16.dp,
+                                fillColor = if (palette.isDark) Color(0xCC090E1B) else Color(0xDDF4F8FF),
+                                borderAccent = palette.accentPrimary.copy(alpha = 0.45f)
+                            )
+                            .clickable { onToggleCamera() }
+                            .padding(horizontal = 8.dp, vertical = 5.dp)
+                            .testTag("camera_facing_toggle_button"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Cameraswitch,
+                            contentDescription = "Switch Front/Back Camera",
+                            tint = palette.accentPrimary,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = if (useFrontCamera) "FRONT" else "REAR",
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = palette.accentPrimary
+                        )
+                    }
+                }
+            }
         }
 
         // Bottom Frosted Gesture HUD (ONNX Prediction + Confidence + Latency)
@@ -356,17 +404,17 @@ fun CameraPreviewPlaceholder(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(12.dp)
+                .padding(10.dp)
                 .glassSurface(
                     cornerRadius = 16.dp,
-                    fillColor = GlassFillElevated.copy(alpha = 0.88f),
+                    fillColor = palette.glassFillElevated.copy(alpha = 0.90f),
                     borderAccent = when {
-                        currentGesture.isAccepted -> EmeraldSuccess.copy(alpha = 0.65f)
-                        currentGesture.isHandDetected -> Color(0xFFF59E0B).copy(alpha = 0.5f)
-                        else -> NeonCyan.copy(alpha = 0.35f)
+                        currentGesture.isAccepted -> palette.success.copy(alpha = 0.65f)
+                        currentGesture.isHandDetected -> palette.warning.copy(alpha = 0.5f)
+                        else -> palette.accentPrimary.copy(alpha = 0.35f)
                     }
                 )
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(horizontal = 14.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -377,24 +425,19 @@ fun CameraPreviewPlaceholder(
             ) {
                 Text(
                     text = currentGesture.gesture.symbol,
-                    fontSize = 26.sp
+                    fontSize = 24.sp
                 )
                 Column {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            text = if (currentGesture.isHandDetected) {
-                                "${currentGesture.predictedClass.uppercase()} · ${currentGesture.gesture.actionName}"
-                            } else {
-                                currentGesture.gesture.actionName
-                            },
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = if (currentGesture.isAccepted) EmeraldSuccess else NeonCyan
-                        )
-                    }
+                    Text(
+                        text = if (currentGesture.isHandDetected) {
+                            "${currentGesture.predictedClass.uppercase()} · ${currentGesture.gesture.actionName}"
+                        } else {
+                            currentGesture.gesture.actionName
+                        },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (currentGesture.isAccepted) palette.success else palette.accentPrimary
+                    )
                     Text(
                         text = when {
                             currentGesture.errorMessage != null -> currentGesture.errorMessage
@@ -404,7 +447,7 @@ fun CameraPreviewPlaceholder(
                         },
                         style = MaterialTheme.typography.bodySmall,
                         fontSize = 11.sp,
-                        color = TextSecondary,
+                        color = palette.textSecondary,
                         maxLines = 1
                     )
                 }
@@ -421,9 +464,9 @@ fun CameraPreviewPlaceholder(
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
                     color = when {
-                        currentGesture.isAccepted -> EmeraldSuccess
-                        currentGesture.isHandDetected -> Color(0xFFF59E0B)
-                        else -> TextSecondary
+                        currentGesture.isAccepted -> palette.success
+                        currentGesture.isHandDetected -> palette.warning
+                        else -> palette.textSecondary
                     }
                 )
                 Text(
@@ -431,7 +474,7 @@ fun CameraPreviewPlaceholder(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
-                    color = if (currentGesture.isAccepted) EmeraldSuccess else TextSecondary
+                    color = if (currentGesture.isAccepted) palette.success else palette.textSecondary
                 )
             }
         }

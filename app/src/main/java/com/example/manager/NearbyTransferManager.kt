@@ -9,18 +9,22 @@ import com.example.model.NearbyMessage
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * Interface defining peer discovery, connection authentication, real P2P file/stream transfer,
- * SHA-256 verification, and communication.
+ * Interface defining multi-peer discovery, concurrent authenticated connections,
+ * real P2P file/stream transfer with ContentResolver URI safety, SHA-256 verification,
+ * and structured per-recipient tracking.
  */
 interface NearbyTransferManager {
     val discoveredDevices: StateFlow<List<DeviceItem>>
     val isDiscovering: StateFlow<Boolean>
     val isAdvertising: StateFlow<Boolean>
     val pendingSession: StateFlow<ConnectionSession?>
+    val pendingSessions: StateFlow<List<ConnectionSession>>
     val connectedDevice: StateFlow<DeviceItem?>
+    val connectedDevices: StateFlow<List<DeviceItem>>
     val receivedMessages: StateFlow<List<NearbyMessage>>
     val incomingTransferOffer: StateFlow<IncomingTransferOffer?>
     val activeTransfer: StateFlow<ActiveTransfer?>
+    val endpointTransfers: StateFlow<Map<String, ActiveTransfer>>
     val statusMessage: StateFlow<String>
     val isNearbyAvailable: StateFlow<Boolean>
 
@@ -36,9 +40,11 @@ interface NearbyTransferManager {
     fun acceptConnection(endpointId: String)
     fun rejectConnection(endpointId: String)
     fun disconnectDevice(endpointId: String)
+    fun forgetDevice(endpointId: String)
     fun stopAllEndpoints()
 
     fun sendTextMessage(message: String): Boolean
+    fun sendTextMessageTo(endpointId: String, message: String): Boolean
     fun sendPingTest(): Boolean
 
     fun acceptTransferOffer(transferId: String)
@@ -54,6 +60,13 @@ interface NearbyTransferManager {
         myDeviceName: String,
         onComplete: (ActiveTransfer) -> Unit
     )
+    fun startMultiRecipientTransfer(
+        targetDevices: List<DeviceItem>,
+        items: List<ContentItem>,
+        myDeviceName: String,
+        onRecipientComplete: (ActiveTransfer) -> Unit
+    )
     fun cancelTransfer()
+    fun cancelTransferForEndpoint(endpointId: String)
     fun retryTransfer()
 }

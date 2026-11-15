@@ -1,7 +1,6 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,10 +13,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -31,43 +30,49 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.ScreenRoute
-import com.example.ui.theme.GlassFill
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.GestoTheme
 import com.example.ui.theme.glassSurface
 
 @Composable
 fun AirShareTopBar(
     currentRoute: ScreenRoute,
     isAdvertising: Boolean,
+    errorCount: Int = 0,
     onBackClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onDiagnosticsClick: () -> Unit = {},
     onToggleAdvertising: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val palette = GestoTheme.colors
+
     val title = when (currentRoute) {
-        ScreenRoute.HOME -> "GestoShare"
+        ScreenRoute.SPLASH, ScreenRoute.ONBOARDING, ScreenRoute.HOME -> "GestoShare"
         ScreenRoute.CONTENT_SELECTION -> "Select Content"
         ScreenRoute.NEARBY_DEVICES -> "Nearby Devices"
         ScreenRoute.GESTURE_CONTROL -> "Gesture Radar"
         ScreenRoute.TRANSFER -> "Active Transfer"
         ScreenRoute.HISTORY -> "Transfer History"
-        ScreenRoute.SETTINGS -> "Settings & Hardware"
+        ScreenRoute.SETTINGS -> "Settings"
+        ScreenRoute.DIAGNOSTICS -> "Diagnostics & Errors"
+        ScreenRoute.ABOUT -> "About GestoShare"
     }
 
     val subtitle = when (currentRoute) {
-        ScreenRoute.HOME -> "Peer-to-Peer Gesture File Sharing"
-        ScreenRoute.CONTENT_SELECTION -> "Import files, photos, PDFs & links"
-        ScreenRoute.NEARBY_DEVICES -> "Discover and connect nearby Android peers"
-        ScreenRoute.GESTURE_CONTROL -> "CameraX + MediaPipe 21-Keypoint Pipeline"
-        ScreenRoute.TRANSFER -> "Offline P2P transfer with SHA-256 verification"
-        ScreenRoute.HISTORY -> "Audit logs and cryptographic integrity records"
-        ScreenRoute.SETTINGS -> "Bluetooth, Wi-Fi & AI model configuration"
+        ScreenRoute.SPLASH, ScreenRoute.ONBOARDING, ScreenRoute.HOME -> "Peer-to-Peer Gesture File Sharing"
+        ScreenRoute.CONTENT_SELECTION -> "Import files, photos, PDFs, notes & links"
+        ScreenRoute.NEARBY_DEVICES -> "Multi-peer offline Nearby cluster"
+        ScreenRoute.GESTURE_CONTROL -> "CameraX + MediaPipe + HaGRIDv2 ONNX"
+        ScreenRoute.TRANSFER -> "Scoped-storage safe & SHA-256 verified"
+        ScreenRoute.HISTORY -> "Local audit trail & cryptographic records"
+        ScreenRoute.SETTINGS -> "Theme, sensitivity, hardware & logs"
+        ScreenRoute.DIAGNOSTICS -> "Error reports, stack traces & TXT/JSON export"
+        ScreenRoute.ABOUT -> "Offline architecture & AI pipeline info"
     }
 
     Column(
@@ -75,10 +80,7 @@ fun AirShareTopBar(
             .fillMaxWidth()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xD80A1124),
-                        Color(0xAA0C162E)
-                    )
+                    colors = listOf(palette.topBarStart, palette.topBarEnd)
                 )
             )
     ) {
@@ -105,27 +107,15 @@ fun AirShareTopBar(
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "Navigate Back",
-                                tint = NeonCyan
+                                tint = palette.accentPrimary
                             )
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                     } else {
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .glassSurface(
-                                    cornerRadius = 19.dp,
-                                    fillColor = GlassFill,
-                                    borderAccent = NeonCyan.copy(alpha = 0.65f),
-                                    borderWidth = 1.5.dp
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "⚡",
-                                fontSize = 18.sp
-                            )
-                        }
+                        GestoShareBrandMark(
+                            size = 38.dp,
+                            cornerRadius = 11.dp
+                        )
                         Spacer(modifier = Modifier.width(10.dp))
                     }
 
@@ -134,13 +124,13 @@ fun AirShareTopBar(
                             text = title,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = TextPrimary
+                            color = palette.textPrimary
                         )
                         Text(
                             text = subtitle,
                             style = MaterialTheme.typography.bodySmall,
                             fontSize = 11.sp,
-                            color = TextSecondary,
+                            color = palette.textSecondary,
                             maxLines = 1
                         )
                     }
@@ -150,34 +140,65 @@ fun AirShareTopBar(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    if (errorCount > 0 && currentRoute != ScreenRoute.DIAGNOSTICS) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .glassSurface(
+                                    cornerRadius = 16.dp,
+                                    fillColor = palette.error.copy(alpha = 0.16f),
+                                    borderAccent = palette.error.copy(alpha = 0.7f)
+                                )
+                                .clickable { onDiagnosticsClick() }
+                                .padding(horizontal = 8.dp, vertical = 5.dp)
+                                .testTag("topbar_diagnostics_badge"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.BugReport,
+                                contentDescription = "Open Diagnostics",
+                                tint = palette.error,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = "$errorCount",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                color = palette.error
+                            )
+                        }
+                    }
+
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(20.dp))
                             .glassSurface(
                                 cornerRadius = 20.dp,
-                                fillColor = if (isAdvertising) NeonCyan.copy(alpha = 0.20f) else GlassFill,
-                                borderAccent = if (isAdvertising) NeonCyan else Color.White.copy(alpha = 0.20f)
+                                fillColor = if (isAdvertising) palette.accentPrimary.copy(alpha = 0.20f) else palette.glassFill,
+                                borderAccent = if (isAdvertising) palette.accentPrimary else palette.glassBorder
                             )
                             .clickable { onToggleAdvertising() }
-                            .padding(horizontal = 11.dp, vertical = 6.dp)
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
                             .testTag("toggle_receive_pill"),
                         contentAlignment = Alignment.Center
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Radio,
                                 contentDescription = "Receive Mode",
-                                tint = if (isAdvertising) NeonCyan else TextSecondary,
+                                tint = if (isAdvertising) palette.accentPrimary else palette.textSecondary,
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
                                 text = if (isAdvertising) "RECEIVING" else "STANDBY",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (isAdvertising) NeonCyan else TextSecondary
+                                color = if (isAdvertising) palette.accentPrimary else palette.textSecondary
                             )
                         }
                     }
@@ -190,7 +211,7 @@ fun AirShareTopBar(
                             Icon(
                                 imageVector = Icons.Default.Settings,
                                 contentDescription = "Settings",
-                                tint = TextSecondary
+                                tint = palette.textSecondary
                             )
                         }
                     }
@@ -198,7 +219,6 @@ fun AirShareTopBar(
             }
         }
 
-        // Specular glass bottom divider
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -207,8 +227,8 @@ fun AirShareTopBar(
                     Brush.horizontalGradient(
                         listOf(
                             Color.Transparent,
-                            NeonCyan.copy(alpha = 0.35f),
-                            Color.White.copy(alpha = 0.16f),
+                            palette.accentPrimary.copy(alpha = 0.35f),
+                            palette.glassBorder,
                             Color.Transparent
                         )
                     )

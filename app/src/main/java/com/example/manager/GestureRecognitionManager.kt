@@ -23,8 +23,11 @@ data class GestureSessionContext(
     val discoveredDevices: List<DeviceItem> = emptyList(),
     val selectedDevice: DeviceItem? = null,
     val connectedDevice: DeviceItem? = null,
+    val connectedDevices: List<DeviceItem> = emptyList(),
     val pendingSession: ConnectionSession? = null,
     val activeTransfer: ActiveTransfer? = null,
+    val multiSelectRecipients: List<DeviceItem> = emptyList(),
+    val isMultiSelectMode: Boolean = false,
     val isModelAvailable: Boolean = true,
     val modelUnavailableReason: String? = null
 )
@@ -35,6 +38,7 @@ sealed class GestureActionEffect {
     data class SelectPeerDevice(val device: DeviceItem, val isAlreadyConnected: Boolean) : GestureActionEffect()
     data class DispatchTransferOffer(
         val targetDevice: DeviceItem,
+        val targetDevices: List<DeviceItem> = listOf(targetDevice),
         val items: List<ContentItem>,
         val isDryRun: Boolean
     ) : GestureActionEffect()
@@ -68,9 +72,9 @@ interface GestureRecognitionManager {
 }
 
 /**
- * Full Phase 8 gesture session state machine integrating temporal gesture commands
- * with staged content, discovered Nearby peer cycling, pairing handshake state, and
- * verified P2P transfer lifecycle.
+ * Full Phase 8–10 gesture session state machine integrating temporal gesture commands
+ * with staged content, multi-device Nearby peer cycling (`POINT`), 6-digit pairing handshake,
+ * optional multi-recipient group dispatch (`THREE_GUN`), and verified P2P transfer lifecycle.
  */
 class DefaultGestureRecognitionManager(
     private val classifier: GestureClassifier = HaGridV2OnnxClassifierPlaceholder()
@@ -183,6 +187,9 @@ class DefaultGestureRecognitionManager(
             )
 
             val current = _sessionState.value
+            val allConnected = context.connectedDevices.ifEmpty {
+                listOfNotNull(context.connectedDevice)
+            }
 
             return when (gesture) {
                 GestureType.NONE, GestureType.OTHER -> {
@@ -256,7 +263,10 @@ class DefaultGestureRecognitionManager(
                 }
 
                 GestureType.POINT -> {
-                    if (current != GestureSessionState.CONTENT_HELD && current != GestureSessionState.TARGET_SELECTED) {
+                    if (current != GestureSessionState.CONTENT_HELD &&
+                        current != GestureSessionState.TARGET_SELECTED &&
+                        current != GestureSessionState.CONNECTED
+                    ) {
                         val msg = when (current) {
                             GestureSessionState.IDLE,
                             GestureSessionState.CANCELLED,
@@ -268,40 +278,48 @@ class DefaultGestureRecognitionManager(
                         _sessionFeedback.value = msg
                         appendLog("POINT rejected in $current")
                         GestureActionEffect.None(msg, isError = current == GestureSessionState.IDLE || current == GestureSessionState.ACTIVATED)
-                    } else if (context.discoveredDevices.isEmpty()) {
-                        val msg = "No nearby devices discovered. Enable Scan Nearby & Receive Mode on peer."
-                        _sessionFeedback.value = msg
-                        appendLog("POINT blocked: 0 discovered peers")
-                        GestureActionEffect.None(msg, isError = true)
                     } else {
-                        val devices = context.discoveredDevices
-                        val currentIndex = devices.indexOfFirst { it.endpointId == context.selectedDevice?.endpointId }
-                        val nextIndex = if (currentIndex == -1) 0 else (currentIndex + 1) % devices.size
-                        val chosen = devices[nextIndex]
-
-                        val alreadyConnected = context.connectedDevice?.endpointId == chosen.endpointId
-                        val isHandshakePending = context.pendingSession?.endpointId == chosen.endpointId &&
-                            (context.pendingSession.status == SessionStatus.INITIATED ||
-                                context.pendingSession.status == SessionStatus.ACCEPTED_LOCALLY)
-
-                        val nextState = when {
-                            alreadyConnected -> {
-                                wasConnectedDuringSession = true
-                                GestureSessionState.CONNECTED
-                            }
-                            isHandshakePending -> GestureSessionState.CONNECTION_PENDING
-                            else -> GestureSessionState.TARGET_SELECTED
-                        }
-                        _sessionState.value = nextState
-
-                        val msg = if (alreadyConnected) {
-                            "Selected connected peer '${chosen.name}' (${chosen.endpointId}). Show THREE_GUN to send."
+                        // Prefer cycling connected devices when >=1 peer is connected; fall back to discovered peers
+                        val pool = if (allConnected.isNotEmpty()) allConnected else context.discoveredDevices
+                        if (pool.isEmpty()) {
+                            val msg = "No nearby devices discovered. Enable Scan Nearby & Receive Mode on peer."
+                            _sessionFeedback.value = msg
+                            appendLog("POINT blocked: 0 discovered peers")
+                            GestureActionEffect.None(msg, isError = true)
                         } else {
-                            "Selected '${chosen.name}' (${chosen.endpointId}). Accept Nearby pairing to connect."
+                            val currentIndex = pool.indexOfFirst { it.endpointId == context.selectedDevice?.endpointId }
+                            val nextIndex = if (currentIndex == -1) 0 else (currentIndex + 1) % pool.size
+                            val chosen = pool[nextIndex]
+
+                            val alreadyConnected = allConnected.any { it.endpointId == chosen.endpointId }
+                            val isHandshakePending = context.pendingSession?.endpointId == chosen.endpointId &&
+                                (context.pendingSession.status == SessionStatus.INITIATED ||
+                                    context.pendingSession.status == SessionStatus.ACCEPTED_LOCALLY)
+
+                            val nextState = when {
+                                alreadyConnected -> {
+                                    wasConnectedDuringSession = true
+                                    GestureSessionState.CONNECTED
+                                }
+                                isHandshakePending -> GestureSessionState.CONNECTION_PENDING
+                                else -> GestureSessionState.TARGET_SELECTED
+                            }
+                            _sessionState.value = nextState
+
+                            val positionLabel = if (pool.size == 1 && alreadyConnected) {
+                                "Only connected device"
+                            } else {
+                                "${nextIndex + 1} of ${pool.size}"
+                            }
+                            val msg = if (alreadyConnected) {
+                                "Selected ${chosen.name} ($positionLabel). Show THREE_GUN to send."
+                            } else {
+                                "Selected '${chosen.name}' (${chosen.endpointId}). Accept Nearby pairing to connect."
+                            }
+                            _sessionFeedback.value = msg
+                            appendLog("POINT -> $nextState (${chosen.name} [$positionLabel])")
+                            GestureActionEffect.SelectPeerDevice(chosen, alreadyConnected)
                         }
-                        _sessionFeedback.value = msg
-                        appendLog("POINT -> $nextState (${chosen.name} [${chosen.endpointId}])")
-                        GestureActionEffect.SelectPeerDevice(chosen, alreadyConnected)
                     }
                 }
 
@@ -313,9 +331,20 @@ class DefaultGestureRecognitionManager(
                         return GestureActionEffect.None(msg, isError = true)
                     }
 
-                    val target = context.selectedDevice ?: context.connectedDevice
-                    if (target == null) {
-                        val msg = "No target device selected. Use POINT or tap a discovered device first."
+                    val groupTargets = if (context.isMultiSelectMode && context.multiSelectRecipients.isNotEmpty()) {
+                        context.multiSelectRecipients.filter { candidate ->
+                            allConnected.any { it.endpointId == candidate.endpointId }
+                        }
+                    } else {
+                        emptyList()
+                    }
+
+                    val singleTarget = context.selectedDevice?.let { sel ->
+                        allConnected.find { it.endpointId == sel.endpointId } ?: sel
+                    } ?: allConnected.firstOrNull()
+
+                    if (singleTarget == null && groupTargets.isEmpty()) {
+                        val msg = "No connected recipient selected. Point to choose a device."
                         _sessionFeedback.value = msg
                         appendLog("THREE_GUN blocked: no target device")
                         return GestureActionEffect.None(msg, isError = true)
@@ -345,32 +374,42 @@ class DefaultGestureRecognitionManager(
                         return GestureActionEffect.None(msg, isError = true)
                     }
 
-                    val isConnectedToTarget = context.connectedDevice != null &&
-                        context.connectedDevice.endpointId == target.endpointId
-                    if (!isConnectedToTarget || current != GestureSessionState.CONNECTED) {
-                        val msg = if (!isConnectedToTarget) {
-                            "Receiver '${target.name}' is not connected yet. Complete Nearby pairing handshake first."
-                        } else {
-                            "THREE_GUN requires CONNECTED state (currently $current)."
+                    val effectiveTargets = if (groupTargets.isNotEmpty()) groupTargets else {
+                        val t = singleTarget!!
+                        val isConnectedToTarget = allConnected.any { it.endpointId == t.endpointId }
+                        if (!isConnectedToTarget || current != GestureSessionState.CONNECTED) {
+                            val msg = if (!isConnectedToTarget) {
+                                "Receiver '${t.name}' is not connected yet. Complete Nearby pairing handshake first."
+                            } else {
+                                "THREE_GUN requires CONNECTED state (currently $current)."
+                            }
+                            _sessionFeedback.value = msg
+                            appendLog("THREE_GUN blocked: not connected (state=$current, target=${t.endpointId})")
+                            return GestureActionEffect.None(msg, isError = true)
                         }
-                        _sessionFeedback.value = msg
-                        appendLog("THREE_GUN blocked: not connected (state=$current, connected=${context.connectedDevice?.endpointId})")
-                        return GestureActionEffect.None(msg, isError = true)
+                        listOf(t)
                     }
 
+                    val primaryTarget = effectiveTargets.first()
                     val isDryRun = _operationMode.value == GestureOperationMode.DEBUG_DRY_RUN
                     offerDispatchedForSession = true
                     _sessionState.value = GestureSessionState.TRANSFER_OFFERED
 
-                    val msg = if (isDryRun) {
-                        "DEBUG / DRY RUN: THREE_GUN recognized for '${target.name}' — real Nearby send disabled."
+                    val targetDesc = if (effectiveTargets.size > 1) {
+                        "${effectiveTargets.size} selected peers (${effectiveTargets.joinToString { it.name }})"
                     } else {
-                        "Sending real TRANSFER_OFFER to '${target.name}' (receiver consent required)..."
+                        "'${primaryTarget.name}'"
+                    }
+                    val msg = if (isDryRun) {
+                        "DEBUG / DRY RUN: THREE_GUN recognized for $targetDesc — real Nearby send disabled."
+                    } else {
+                        "Sending real TRANSFER_OFFER to $targetDesc (receiver consent required)..."
                     }
                     _sessionFeedback.value = msg
                     appendLog(if (isDryRun) "THREE_GUN -> TRANSFER_OFFERED (DRY RUN)" else "THREE_GUN -> TRANSFER_OFFERED (REAL)")
                     GestureActionEffect.DispatchTransferOffer(
-                        targetDevice = target,
+                        targetDevice = primaryTarget,
+                        targetDevices = effectiveTargets,
                         items = context.stagedItems,
                         isDryRun = isDryRun
                     )
@@ -383,7 +422,12 @@ class DefaultGestureRecognitionManager(
         synchronized(lock) {
             val current = _sessionState.value
             val selected = context.selectedDevice
-            val connected = context.connectedDevice
+            val allConnected = context.connectedDevices.ifEmpty { listOfNotNull(context.connectedDevice) }
+            val connectedForTarget = if (selected != null) {
+                allConnected.find { it.endpointId == selected.endpointId }
+            } else {
+                allConnected.firstOrNull()
+            }
             val pending = context.pendingSession
             val active = context.activeTransfer
 
@@ -395,18 +439,20 @@ class DefaultGestureRecognitionManager(
                 }
             }
 
-            // Synchronize connection establishment & loss
-            if (connected != null && (selected == null || connected.endpointId == selected.endpointId)) {
+            if (connectedForTarget != null) {
                 wasConnectedDuringSession = true
                 if (current == GestureSessionState.TARGET_SELECTED || current == GestureSessionState.CONNECTION_PENDING) {
                     _sessionState.value = GestureSessionState.CONNECTED
-                    _sessionFeedback.value = "Connected to ${connected.name}. Show THREE_GUN to send."
-                    appendLog("Peer paired -> CONNECTED (${connected.name})")
+                    _sessionFeedback.value = "Connected to ${connectedForTarget.name}. Show THREE_GUN to send."
+                    appendLog("Peer paired -> CONNECTED (${connectedForTarget.name})")
                 }
             } else if (pending != null && (selected == null || pending.endpointId == selected.endpointId)) {
                 when (pending.status) {
                     SessionStatus.INITIATED, SessionStatus.ACCEPTED_LOCALLY -> {
-                        if (current == GestureSessionState.TARGET_SELECTED || current == GestureSessionState.ACTIVATED || current == GestureSessionState.CONTENT_HELD) {
+                        if (current == GestureSessionState.TARGET_SELECTED ||
+                            current == GestureSessionState.ACTIVATED ||
+                            current == GestureSessionState.CONTENT_HELD
+                        ) {
                             _sessionState.value = GestureSessionState.CONNECTION_PENDING
                             _sessionFeedback.value = "Confirm pairing code ${pending.authDigits} on both phones."
                         }
@@ -420,7 +466,7 @@ class DefaultGestureRecognitionManager(
                     }
                     else -> Unit
                 }
-            } else if (wasConnectedDuringSession && connected == null) {
+            } else if (wasConnectedDuringSession && connectedForTarget == null) {
                 if (current == GestureSessionState.CONNECTED ||
                     (_operationMode.value == GestureOperationMode.GESTURE_TRANSFER &&
                         (current == GestureSessionState.TRANSFER_OFFERED ||
@@ -431,12 +477,11 @@ class DefaultGestureRecognitionManager(
                     wasConnectedDuringSession = false
                     offerDispatchedForSession = false
                     _sessionState.value = GestureSessionState.FAILED
-                    _sessionFeedback.value = "Connection lost with peer device."
-                    appendLog("Connection lost -> FAILED")
+                    _sessionFeedback.value = "Connection lost: selected recipient disconnected."
+                    appendLog("Selected peer disconnected -> FAILED")
                 }
             }
 
-            // Synchronize real Nearby transfer lifecycle strictly from ActiveTransfer callbacks
             if (active != null && (trackedTransferId == null || trackedTransferId == active.id)) {
                 val shouldBindNew = trackedTransferId == null &&
                     (active.status == TransferStatus.PREPARING ||
@@ -496,9 +541,6 @@ class DefaultGestureRecognitionManager(
         }
     }
 
-    /**
-     * Convenience test hook for isolated state-machine tests using a synthetic connected context.
-     */
     override fun simulateGestureForTesting(gesture: GestureType, confidence: Float) {
         val dummyItem = ContentItem(
             name = "TestFile.pdf",
@@ -514,7 +556,8 @@ class DefaultGestureRecognitionManager(
                 stagedItems = listOf(dummyItem),
                 discoveredDevices = listOf(dummyDevice),
                 selectedDevice = dummyDevice,
-                connectedDevice = dummyDevice
+                connectedDevice = dummyDevice,
+                connectedDevices = listOf(dummyDevice)
             )
         )
     }
